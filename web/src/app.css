@@ -1,0 +1,38 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* ANSI color rendering: see ansi.ts. */
+.ansi-30 { color: #4b5563; }
+.ansi-31 { color: #ef4444; }
+.ansi-32 { color: #22c55e; }
+.ansi-33 { color: #eab308; }
+.ansi-34 { color: #3b82f6; }
+.ansi-35 { color: #ec4899; }
+.ansi-36 { color: #06b6d4; }
+.ansi-37 { color: #d4d4d8; }
+.ansi-90 { color: #71717a; }
+.ansi-91 { color: #f87171; }
+.ansi-92 { color: #4ade80; }
+.ansi-93 { color: #facc15; }
+.ansi-94 { color: #60a5fa; }
+.ansi-95 { color: #f472b6; }
+.ansi-96 { color: #22d3ee; }
+.ansi-97 { color: #fafafa; }
+.ansi-1 { font-weight: 600; }

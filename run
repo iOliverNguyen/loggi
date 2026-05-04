@@ -1,0 +1,118 @@
+#!/bin/bash
+set -eo pipefail
+
+# Resolve PROJECT_ROOT from this script's location so `./run` works regardless
+# of how it was invoked. .envrc may override / re-export it for jj/git workspaces.
+export PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Load environment if .envrc is present (works with or without direnv).
+if [ -f "$PROJECT_ROOT/.envrc" ]; then
+  source "$PROJECT_ROOT/.envrc"
+fi
+
+# ============================================================================
+# Subcommands — define run-<name>() functions here.
+# They auto-register; no need to edit scripts/_cli.sh.
+# ============================================================================
+
+run-build-web() {
+  usage-prompt "./run build-web — install web deps and build the embedded SPA" "$1"
+  p-info "pnpm install + build → internal/app/spa/"
+  cd "$PROJECT_ROOT/web" && pnpm install && pnpm run build
+  p-success "spa built"
+}
+
+run-build() {
+  usage-prompt "./run build — build the loggi binary (incl. embedded SPA)" "$1"
+  if [ ! -f "$PROJECT_ROOT/internal/app/spa/index.html" ]; then
+    p-warn "no SPA bundle found — running build-web first"
+    run-build-web
+  fi
+  p-info "go build ./cmd/loggi → ./loggi"
+  cd "$PROJECT_ROOT" && go build -o loggi ./cmd/loggi
+  p-success "loggi binary built ($(ls -lh loggi | awk '{print $5}'))"
+}
+
+run-dev-web() {
+  usage-prompt "./run dev-web — run the Vite dev server with HMR" "$1"
+  p-info "vite dev server (proxies /ws and /api to a running loggi server)"
+  cd "$PROJECT_ROOT/web" && pnpm run dev
+}
+
+run-test() {
+  usage-prompt "./run test [-race] [pkg...] — run Go tests (default: all, -short)" "$1"
+  cd "$PROJECT_ROOT"
+  if [ "$#" -eq 0 ]; then
+    p-info "go test -race -short ./..."
+    go test -race -short ./... -count=1 -timeout=60s
+  else
+    p-info "go test $*"
+    go test "$@"
+  fi
+  p-success "tests passed"
+}
+
+run-test-all() {
+  usage-prompt "./run test-all — run the full Go test suite (incl. compression bench)" "$1"
+  cd "$PROJECT_ROOT"
+  p-info "go test -race ./... (no -short)"
+  go test -race ./... -count=1 -timeout=180s
+  p-success "all tests passed"
+}
+
+run-server() {
+  usage-prompt "./run server — start the loggi daemon (foreground)" "$1"
+  if [ ! -x "$PROJECT_ROOT/loggi" ]; then
+    run-build
+  fi
+  p-info "starting loggi server (Ctrl-C to stop)"
+  exec "$PROJECT_ROOT/loggi" server
+}
+
+run-stop() {
+  usage-prompt "./run stop — stop a running loggi daemon" "$1"
+  if [ ! -x "$PROJECT_ROOT/loggi" ]; then
+    p-error "no ./loggi binary; run ./run build first"
+    exit 1
+  fi
+  "$PROJECT_ROOT/loggi" server stop
+}
+
+run-tail() {
+  usage-prompt "./run tail <file>... — tail file(s) into loggi" "$1" "" "required"
+  if [ ! -x "$PROJECT_ROOT/loggi" ]; then
+    run-build
+  fi
+  exec "$PROJECT_ROOT/loggi" tail "$@"
+}
+
+run-clean() {
+  usage-prompt "./run clean — remove built artifacts" "$1"
+  cd "$PROJECT_ROOT"
+  rm -f loggi
+  rm -rf internal/app/spa/index.html internal/app/spa/assets/
+  rm -rf web/node_modules web/dist
+  p-success "cleaned"
+}
+
+run-fmt() {
+  usage-prompt "./run fmt — format Go code" "$1"
+  cd "$PROJECT_ROOT" && gofmt -w -s .
+  p-success "formatted"
+}
+
+run-lint() {
+  usage-prompt "./run lint — go vet + go build" "$1"
+  cd "$PROJECT_ROOT"
+  p-info "go vet ./..."
+  go vet ./...
+  p-info "go build ./..."
+  go build ./...
+  p-success "lint clean"
+}
+
+# ============================================================================
+# Dispatcher (must come last so all run-* functions are defined first)
+# ============================================================================
+
+source "$PROJECT_ROOT/scripts/_cli.sh"

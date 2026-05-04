@@ -1,0 +1,123 @@
+// Package client implements the local CLI client used by `loggi tail`,
+// `loggi stdin`, etc. It dials the unix socket if present, otherwise spawns
+// the server in daemon mode and retries.
+package client
+
+import (
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"os"
+	"os/exec"
+	"sync"
+	"syscall"
+	"time"
+
+	"github.com/iOliverNguyen/loggi/internal/config"
+	"github.com/iOliverNguyen/loggi/internal/frame"
+	"github.com/iOliverNguyen/loggi/internal/wire"
+)
+
+// Conn is a unix-socket framed connection to the server.
+type Conn struct {
+	c   net.Conn
+	wmu sync.Mutex
+}
+
+// Dial returns a connection to the server, auto-starting it if needed.
+// If autoStart is false, returns ErrServerDown when no server is running.
+func Dial(autoStart bool) (*Conn, error) {
+	sockPath := config.SocketPath()
+
+	if c, err := net.DialTimeout("unix", sockPath, 200*time.Millisecond); err == nil {
+		return &Conn{c: c}, nil
+	} else if !autoStart {
+		return nil, ErrServerDown
+	}
+
+	// Acquire lock to avoid racing two clients into spawning two daemons.
+	lockPath := config.LockPath()
+	lf, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open lock: %w", err)
+	}
+	defer lf.Close()
+	if err := syscall.Flock(int(lf.Fd()), syscall.LOCK_EX); err != nil {
+		return nil, fmt.Errorf("flock: %w", err)
+	}
+
+	// Re-dial after acquiring lock (another process may have started one).
+	if c, err := net.DialTimeout("unix", sockPath, 200*time.Millisecond); err == nil {
+		return &Conn{c: c}, nil
+	}
+
+	// Stale socket?
+	_ = os.Remove(sockPath)
+
+	if err := spawnDaemon(); err != nil {
+		return nil, err
+	}
+
+	// Poll-dial up to 3s.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		c, err := net.DialTimeout("unix", sockPath, 200*time.Millisecond)
+		if err == nil {
+			return &Conn{c: c}, nil
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return nil, errors.New("server did not become reachable in time")
+}
+
+// ErrServerDown is returned by Dial when autoStart is false and no server is up.
+var ErrServerDown = errors.New("loggi server is not running")
+
+// Read reads one server message.
+func (c *Conn) Read(v *wire.ServerMsg) error { return frame.Read(c.c, v) }
+
+// Write writes one client message.
+func (c *Conn) Write(v *wire.ClientMsg) error {
+	c.wmu.Lock()
+	defer c.wmu.Unlock()
+	return frame.Write(c.c, v)
+}
+
+// Close closes the connection.
+func (c *Conn) Close() error { return c.c.Close() }
+
+// Underlying exposes the raw net.Conn for advanced uses (e.g. piping bytes).
+func (c *Conn) Underlying() io.ReadWriteCloser { return c.c }
+
+func spawnDaemon() error {
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	if _, err := config.EnsureUserDir(); err != nil {
+		return err
+	}
+	logPath, _ := config.ServerLogFile()
+	logF, _ := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+
+	cmd := exec.Command(exe, "server", "--daemon")
+	cmd.Stdout = logF
+	cmd.Stderr = logF
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	cmd.Env = os.Environ()
+	if err := cmd.Start(); err != nil {
+		if logF != nil {
+			_ = logF.Close()
+		}
+		return fmt.Errorf("spawn daemon: %w", err)
+	}
+	// Detach: drop the os.Process handle so the kernel doesn't keep it
+	// reapable by us. The child has its own session via Setsid.
+	_ = cmd.Process.Release()
+	// Close the parent's fd; the child has its own duplicated copy.
+	if logF != nil {
+		_ = logF.Close()
+	}
+	return nil
+}
