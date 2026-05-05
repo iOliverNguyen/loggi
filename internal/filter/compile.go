@@ -171,6 +171,10 @@ func stringEqIgnoringQuotes(a, b string) bool {
 // Fast path: a single-segment path that names a hot column reads directly
 // from the column without materializing the whole row.
 func materializeField(s *store.Store, seq uint64, path []string) string {
+	// `source` is a synthetic field resolved via the server-installed lookup.
+	if len(path) == 1 && path[0] == "source" {
+		return s.SourceName(s.SourceIDOfSeq(seq))
+	}
 	if len(path) == 1 {
 		if s.HotColumn(path[0]) != nil {
 			return s.HotString(seq, path[0])
@@ -188,6 +192,8 @@ func materializeField(s *store.Store, seq uint64, path []string) string {
 			return row.Service
 		case "msg":
 			return row.Msg
+		case "source":
+			return s.SourceName(row.SourceID)
 		}
 	}
 	// Walk into the Fields JSON object lazily.

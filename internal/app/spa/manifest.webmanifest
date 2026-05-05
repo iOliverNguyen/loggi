@@ -1,0 +1,10 @@
+{
+  "name": "loggi",
+  "short_name": "loggi",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0a0a0a",
+  "theme_color": "#0ea5e9",
+  "icons": []
+}

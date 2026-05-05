@@ -11,9 +11,6 @@ importers:
       '@sveltejs/vite-plugin-svelte':
         specifier: ^5.0.3
         version: 5.1.1(svelte@5.55.5)(vite@6.4.2(@types/node@25.6.0)(jiti@1.21.7))
-      '@types/node':
-        specifier: ^25.6.0
-        version: 25.6.0
       autoprefixer:
         specifier: ^10.4.20
         version: 10.5.0(postcss@8.5.13)
@@ -1042,6 +1039,7 @@ snapshots:
   '@types/node@25.6.0':
     dependencies:
       undici-types: 7.19.2
+    optional: true
 
   '@types/trusted-types@2.0.7': {}
 
@@ -1445,7 +1443,8 @@ snapshots:
 
   typescript@5.9.3: {}
 
-  undici-types@7.19.2: {}
+  undici-types@7.19.2:
+    optional: true
 
   update-browserslist-db@1.2.3(browserslist@4.28.2):
     dependencies:

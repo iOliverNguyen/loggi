@@ -19,6 +19,7 @@ import (
 	"github.com/iOliverNguyen/loggi/internal/config"
 	"github.com/iOliverNguyen/loggi/internal/source"
 	"github.com/iOliverNguyen/loggi/internal/store"
+	"github.com/iOliverNguyen/loggi/internal/wire"
 )
 
 // Options configures a Server.
@@ -32,6 +33,10 @@ type Options struct {
 	Profiles       []ProfileInfo
 	Theme          string
 	DefaultProfile string
+	// RepoRoot is the detected repo root (.git/go.mod) at server-start cwd.
+	// Empty if the server wasn't started inside a repo. Used to resolve the
+	// "repo" save destination for /api/profiles.
+	RepoRoot string
 }
 
 // ProfileInfo is the wire representation of a config profile.
@@ -57,7 +62,20 @@ type Server struct {
 	ingest chan source.RawLine
 
 	// Client session count for idle exit.
-	sessions atomic.Int64
+	sessionCnt atomic.Int64
+
+	// Live session registry for fanning out source events to every
+	// connected client (CLI socket + every web tab). Population is keyed by
+	// session.id so we can unregister cleanly even if a session crashes
+	// mid-handler. Writers to a session's conn never block one another:
+	// each conn already serializes its writes via wmu.
+	sessMu   sync.RWMutex
+	sessions map[uint64]*session
+
+	// profilesMu guards Options.Profiles after construction. The slice is
+	// mutated by save/delete handlers and read by GET; without this the
+	// reader would walk a backing array being rewritten in place.
+	profilesMu sync.Mutex
 
 	httpListener net.Listener
 	unixListener net.Listener
@@ -66,6 +84,8 @@ type Server struct {
 	cancel context.CancelFunc
 
 	httpURL string
+
+	startedAt time.Time
 
 	// Idle timer
 	idleMu    sync.Mutex
@@ -103,15 +123,25 @@ func NewServer(opts Options) *Server {
 		opts.StoreCap = 524288
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Server{
-		opts:   opts,
-		logger: opts.Logger,
-		store:  store.New(store.Options{Cap: opts.StoreCap}),
-		srcs:   make(map[uint64]*sourceRec),
-		ingest: make(chan source.RawLine, 8192),
-		ctx:    ctx,
-		cancel: cancel,
+	srv := &Server{
+		opts:     opts,
+		logger:   opts.Logger,
+		store:    store.New(store.Options{Cap: opts.StoreCap}),
+		srcs:     make(map[uint64]*sourceRec),
+		ingest:   make(chan source.RawLine, 8192),
+		ctx:      ctx,
+		cancel:   cancel,
+		sessions: make(map[uint64]*session),
 	}
+	srv.store.SetSourceNameLookup(func(id uint64) string {
+		srv.srcMu.RLock()
+		defer srv.srcMu.RUnlock()
+		if r, ok := srv.srcs[id]; ok {
+			return r.src.Name()
+		}
+		return ""
+	})
+	return srv
 }
 
 // Store returns the underlying store (used by tests / handlers).
@@ -127,6 +157,7 @@ func (s *Server) SocketPath() string { return s.opts.SocketPath }
 // ingester loop. It returns once both listeners are ready; serving continues
 // in goroutines until Shutdown is called.
 func (s *Server) Start() error {
+	s.startedAt = time.Now()
 	// Unix socket
 	if s.opts.SocketPath != "" {
 		_ = os.Remove(s.opts.SocketPath)
@@ -223,16 +254,23 @@ func (s *Server) attach(id uint64, src source.Source) error {
 	s.cancelIdle()
 	go func() {
 		err := src.Run(ctx, s.ingest)
+		var newState, detail string
 		s.srcMu.Lock()
 		if r, ok := s.srcs[id]; ok {
 			if err != nil && err != context.Canceled {
 				r.state = "error"
+				newState = "error"
+				detail = err.Error()
 				s.logger.Printf("source %d (%s) error: %v", id, src.Name(), err)
 			} else {
 				r.state = "closed"
+				newState = "closed"
 			}
 		}
 		s.srcMu.Unlock()
+		if newState != "" {
+			s.broadcastSourceState(id, newState, detail)
+		}
 		s.maybeStartIdle()
 	}()
 	return nil
@@ -425,7 +463,57 @@ func (s *Server) shouldIdle() bool {
 		}
 	}
 	s.srcMu.RUnlock()
-	return open == 0 && s.sessions.Load() == 0
+	return open == 0 && s.sessionCnt.Load() == 0
+}
+
+// registerSession adds sess to the live registry so source events fan out
+// to its conn. Idempotent on id collisions (the sessionGen is a single
+// monotonic counter, so collisions don't happen in practice).
+func (s *Server) registerSession(sess *session) {
+	s.sessMu.Lock()
+	s.sessions[sess.id] = sess
+	s.sessMu.Unlock()
+}
+
+// unregisterSession is called on session exit. Safe to call for ids that
+// were never registered (no-op).
+func (s *Server) unregisterSession(id uint64) {
+	s.sessMu.Lock()
+	delete(s.sessions, id)
+	s.sessMu.Unlock()
+}
+
+// broadcastSourceEvent sends ev to every registered session. Per-conn
+// write errors are non-fatal — a stuck client will be reaped by its own
+// read loop. We snapshot the session list under RLock so a slow Write
+// doesn't hold up registry mutation.
+func (s *Server) broadcastSourceEvent(ev wire.SourceEvent) {
+	s.sessMu.RLock()
+	sessList := make([]*session, 0, len(s.sessions))
+	for _, sess := range s.sessions {
+		sessList = append(sessList, sess)
+	}
+	s.sessMu.RUnlock()
+	msg := &wire.ServerMsg{Type: wire.SMsgSource, Source: &ev}
+	for _, sess := range sessList {
+		_ = sess.conn.Write(msg)
+	}
+}
+
+// broadcastSourceState builds a SourceEvent from the current source
+// record (if it still exists) and broadcasts it. Used both for "open"
+// transitions from session.go and for async "error"/"closed" transitions
+// from the attach goroutine.
+func (s *Server) broadcastSourceState(id uint64, state, detail string) {
+	ev := wire.SourceEvent{SourceID: id, State: state, Detail: detail}
+	s.srcMu.RLock()
+	if r, ok := s.srcs[id]; ok {
+		ev.Kind = string(r.src.Kind())
+		ev.Name = r.src.Name()
+		ev.Mode = r.modeStr()
+	}
+	s.srcMu.RUnlock()
+	s.broadcastSourceEvent(ev)
 }
 
 // Done returns a channel that closes when the server is shut down.

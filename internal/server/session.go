@@ -50,10 +50,10 @@ func (g *sessionIDGen) next() uint64 {
 // runSession reads frames until the connection closes; dispatches to handlers.
 func (s *Server) runSession(ctx context.Context, conn Conn) {
 	id := sessionGen.next()
-	s.sessions.Add(1)
+	s.sessionCnt.Add(1)
 	s.cancelIdle()
 	defer func() {
-		s.sessions.Add(-1)
+		s.sessionCnt.Add(-1)
 		_ = conn.Close()
 		s.maybeStartIdle()
 	}()
@@ -65,6 +65,8 @@ func (s *Server) runSession(ctx context.Context, conn Conn) {
 		subs:      make(map[uint64]*sessionSub),
 		stdinSrcs: make(map[uint64]*stdinSource),
 	}
+	s.registerSession(sess)
+	defer s.unregisterSession(id)
 	defer sess.cleanup()
 
 	// Send a snapshot.
@@ -141,12 +143,22 @@ func (sess *session) handle(msg *wire.ClientMsg) {
 		sess.handleAddSource(msg)
 	case wire.CMsgRemoveSrc:
 		if msg.RemoveSrc != nil {
-			if err := sess.srv.RemoveSource(msg.RemoveSrc.SourceID); err != nil {
+			srcID := msg.RemoveSrc.SourceID
+			// Capture kind/name before RemoveSource deletes the record so
+			// the broadcast carries identifying info.
+			ev := wire.SourceEvent{SourceID: srcID, State: "closed"}
+			sess.srv.srcMu.RLock()
+			if r, ok := sess.srv.srcs[srcID]; ok {
+				ev.Kind = string(r.src.Kind())
+				ev.Name = r.src.Name()
+			}
+			sess.srv.srcMu.RUnlock()
+			if err := sess.srv.RemoveSource(srcID); err != nil {
 				sess.errMsg(msg.ID, "remove_source", err.Error())
 				return
 			}
-			sess.broadcastSourceEvent(msg.RemoveSrc.SourceID, "closed")
-			sess.ack(msg.ID, true, 0, msg.RemoveSrc.SourceID, "")
+			sess.srv.broadcastSourceEvent(ev)
+			sess.ack(msg.ID, true, 0, srcID, "")
 		}
 	case wire.CMsgStreamData:
 		if msg.StreamData != nil {
@@ -243,7 +255,7 @@ func (sess *session) handleAddSource(msg *wire.ClientMsg) {
 			sess.errMsg(msg.ID, "add_failed", err.Error())
 			return
 		}
-		sess.broadcastSourceEvent(id, "open")
+		sess.srv.broadcastSourceState(id, "open", "")
 		sess.ack(msg.ID, true, 0, id, "")
 	case "stdin":
 		name := a.Name
@@ -253,7 +265,7 @@ func (sess *session) handleAddSource(msg *wire.ClientMsg) {
 			return
 		}
 		sess.stdinSrcs[id] = src
-		sess.broadcastSourceEvent(id, "open")
+		sess.srv.broadcastSourceState(id, "open", "")
 		sess.ack(msg.ID, true, 0, id, "")
 	case "docker":
 		name := a.Name
@@ -266,7 +278,7 @@ func (sess *session) handleAddSource(msg *wire.ClientMsg) {
 			sess.errMsg(msg.ID, "add_failed", err.Error())
 			return
 		}
-		sess.broadcastSourceEvent(id, "open")
+		sess.srv.broadcastSourceState(id, "open", "")
 		sess.ack(msg.ID, true, 0, id, "")
 	default:
 		sess.errMsg(msg.ID, "bad_kind", "unknown source kind: "+a.Kind)
@@ -403,22 +415,4 @@ func (sess *session) errMsg(refID uint64, code, detail string) {
 	})
 }
 
-func (sess *session) broadcastSourceEvent(sourceID uint64, state string) {
-	for _, info := range sess.srv.Sources() {
-		if info.ID == sourceID {
-			_ = sess.conn.Write(&wire.ServerMsg{
-				Type: wire.SMsgSource,
-				Source: &wire.SourceEvent{
-					SourceID: info.ID, Kind: info.Kind, Name: info.Name,
-					Mode: info.Mode, State: state,
-				},
-			})
-			return
-		}
-	}
-	_ = sess.conn.Write(&wire.ServerMsg{
-		Type: wire.SMsgSource,
-		Source: &wire.SourceEvent{SourceID: sourceID, State: state},
-	})
-}
 

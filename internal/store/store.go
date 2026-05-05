@@ -50,6 +50,12 @@ type Store struct {
 	promoCnt map[string]uint32 // last-window counts
 	rowsSeen uint64
 
+	// SourceName resolves a source id to its display name. Set by the server
+	// at startup; nil-safe via SourceName(). Lets the filter language refer
+	// to sources by name (e.g. `source:my-api`) without baking the registry
+	// into the store.
+	sourceNameFn atomic.Pointer[func(uint64) string]
+
 	// Subscribers
 	subMu sync.RWMutex
 	subs  map[uint64]*Subscriber
@@ -690,6 +696,37 @@ func (s *Store) Materialize(seq uint64) *MaterializedRow {
 		row.Fields = raw
 	}
 	return row
+}
+
+// SetSourceNameLookup registers (or replaces) the source-id → name resolver.
+// Safe to call before or after Append.
+func (s *Store) SetSourceNameLookup(fn func(uint64) string) {
+	if fn == nil {
+		s.sourceNameFn.Store(nil)
+		return
+	}
+	s.sourceNameFn.Store(&fn)
+}
+
+// SourceName returns the registered display name for a source id, or "" if
+// no resolver is set or the id is unknown.
+func (s *Store) SourceName(id uint64) string {
+	p := s.sourceNameFn.Load()
+	if p == nil {
+		return ""
+	}
+	return (*p)(id)
+}
+
+// SourceIDOfSeq returns the source id that ingested the row at seq. Returns
+// 0 if the row has been evicted.
+func (s *Store) SourceIDOfSeq(seq uint64) uint64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if seq < s.tail || seq >= s.head {
+		return 0
+	}
+	return s.sourceID[seq&s.mask]
 }
 
 // MaterializedRow is the materialized form for client delivery.

@@ -16,6 +16,22 @@ export interface SourceInfo {
   name: string;
   mode: string;
   state: string;
+  // Populated when state === "error" — the error reason emitted by the
+  // server's attach goroutine (e.g. "container not found", TTY decode
+  // failure, etc.).
+  detail?: string;
+}
+
+// SourceEventWire mirrors the Go-side wire.SourceEvent shape (snake_case
+// source_id) — what arrives on the WS as snapshot.sources entries and as
+// `m.source`. App.svelte normalizes this into SourceInfo.
+export interface SourceEventWire {
+  source_id: number;
+  kind: string;
+  name: string;
+  state: string;
+  mode?: string;
+  detail?: string;
 }
 
 export interface Profile {
@@ -28,10 +44,10 @@ export interface ServerMsg {
   type: string;
   id?: number;
   batch?: { sub_id: number; entries: WireEntry[]; gap_n?: number };
-  source?: SourceInfo & { state: string };
+  source?: SourceEventWire;
   ack?: { ok: boolean; ref_id?: number; sub_id?: number; src_id?: number; detail?: string };
   err?: { ref_id?: number; code: string; detail: string };
-  snapshot?: { sources: SourceInfo[]; head: number };
+  snapshot?: { sources: SourceEventWire[]; head: number };
   pong?: { nonce: number };
 }
 
