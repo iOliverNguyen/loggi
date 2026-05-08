@@ -1,7 +1,8 @@
 <script lang="ts">
-  let { initialName = "", initialFilter = "", onClose, onSaved } = $props<{
+  let { initialName = "", initialFilter = "", initialColumns = [], onClose, onSaved } = $props<{
     initialName?: string;
     initialFilter?: string;
+    initialColumns?: string[];
     onClose: () => void;
     onSaved: (name: string, path: string) => void;
   }>();
@@ -26,7 +27,7 @@
         body: JSON.stringify({
           name: name.trim(),
           filter,
-          columns: [],
+          columns: initialColumns,
           collapsed_fields: [],
           destination: dest,
         }),

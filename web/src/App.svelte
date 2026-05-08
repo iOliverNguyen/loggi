@@ -22,6 +22,9 @@
   import { requestSaveQuick, QUICK_PROMPT, persistQuickChips, DEFAULT_CHIPS } from "./lib/quick-filters";
   import { parseClauses, withTimeRange } from "./lib/filter-dsl";
   import Timeline from "./lib/Timeline.svelte";
+  import LogRow from "./lib/LogRow.svelte";
+  import ColumnsMenu from "./lib/ColumnsMenu.svelte";
+  import { loadColumns, saveColumns, fromProfileIDs, toProfileIDs, type Column } from "./lib/columns";
   import {
     readSessionFromHash,
     clearAddress,
@@ -394,6 +397,7 @@
     const p = profiles.find((x) => x.name === name);
     if (p) {
       pendingFilter = p.filter ?? "";
+      if (p.columns && p.columns.length > 0) columns = fromProfileIDs(p.columns);
       applyFilter();
     }
   }
@@ -533,6 +537,20 @@
     pendingFilter = withTimeRange(pendingFilter, lo, hi);
     applyFilter();
   }
+
+  // Column configuration — persisted in localStorage; ID list also
+  // round-trips through Profile.Columns when a profile is activated.
+  let columns = $state<Column[]>(loadColumns());
+  let showColumnsMenu = $state(false);
+  let hotColumns = $state<string[]>([]);
+  $effect(() => { saveColumns(columns); });
+  $effect(() => {
+    fetch("/api/columns").then((r) => r.json()).then((j) => {
+      if (Array.isArray(j?.hot)) hotColumns = j.hot;
+    }).catch(() => {});
+  });
+  function onColumnsChange(next: Column[]) { columns = next; }
+  function visibleColumns(cols: Column[]): Column[] { return cols.filter((c) => c.visible); }
   let filterInputEl: HTMLInputElement | null = $state(null);
   let showHelp = $state(false);
   let helpInitialTab = $state<"keys" | "syntax" | "examples" | undefined>(undefined);
@@ -974,6 +992,13 @@
     </button>
     <button
       class={iconBtnCls}
+      title="Configure columns"
+      aria-label="columns"
+      onclick={() => (showColumnsMenu = true)}>
+      <Icon name="columns" size={16} />
+    </button>
+    <button
+      class={iconBtnCls}
       title={`Density: ${density} (click to cycle)`}
       aria-label="cycle density"
       onclick={() => (density = density === "compact" ? "cozy" : density === "cozy" ? "comfortable" : "compact")}>
@@ -1130,7 +1155,7 @@
       {#if pinnedEntries.length > 0}
         <div class="sticky top-0 z-10 bg-amber-50 dark:bg-amber-950/60 border-b border-amber-300/40 dark:border-amber-700/40">
           {#each pinnedEntries as p}
-            <div class="relative pl-4 pr-3 py-1 hover:bg-amber-100/70 dark:hover:bg-amber-900/40 cursor-pointer flex gap-3"
+            <div class="relative pl-4 pr-3 py-1 hover:bg-amber-100/70 dark:hover:bg-amber-900/40 cursor-pointer flex gap-3 items-baseline"
                  role="button"
                  tabindex="0"
                  onclick={() => selectRow(p.seq)}
@@ -1139,11 +1164,14 @@
                     style="background-color: {sourceColor(p.source_id)}"
                     title={sourceName(p.source_id)}></span>
               <span class="shrink-0 w-3 text-amber-600">📌</span>
-              {#if showTimestamps}<span class="text-zinc-500 shrink-0 w-24">{fmtTs(p.ts)}</span>{/if}
-              <span class={`shrink-0 w-12 ${levelClass(p.level)}`}>{(p.level ?? "").toUpperCase()}</span>
-              <span class="shrink-0 w-24 truncate text-zinc-500 text-[11px]">{sourceName(p.source_id)}</span>
-              <span class="shrink-0 w-32 truncate text-zinc-600 dark:text-zinc-400">{p.service ?? ""}</span>
-              <span class="flex-1 truncate">{p.msg ?? ""}</span>
+              <LogRow
+                entry={p}
+                {columns}
+                {showTimestamps}
+                {levelClass}
+                {sourceName}
+                {fmtTs}
+                onSourceClick={(_ev, name) => addFilterClause(`source:${quoteIfNeeded(name)}`)} />
               <button class="text-amber-600 hover:text-amber-700 px-1 shrink-0"
                       title="unpin"
                       onclick={(e) => { e.stopPropagation(); togglePin(p.seq); }}>×</button>
@@ -1183,26 +1211,17 @@
             style="background-color: {sourceColor(e.source_id)}"
             title={sourceName(e.source_id)}></span>
           <div class="flex gap-3">
-            {#if showTimestamps}<span class="text-zinc-500 shrink-0 w-24">{fmtTs(e.ts)}</span>{/if}
-            <span class={`shrink-0 w-12 ${levelClass(e.level)}`}
-              >{(e.level ?? "").toUpperCase()}</span>
-            <button
-              type="button"
-              class="shrink-0 w-24 truncate text-zinc-500 text-[11px] text-left hover:text-sky-600 dark:hover:text-sky-400"
-              title={`filter source:${sourceName(e.source_id)}`}
-              onclick={(ev) => {
-                ev.stopPropagation();
-                addFilterClause(`source:${quoteIfNeeded(sourceName(e.source_id))}`);
-              }}>{sourceName(e.source_id)}</button>
-            <span class="shrink-0 w-32 truncate text-zinc-600 dark:text-zinc-400"
-              >{e.service ?? ""}</span>
-            {#if e.text && e.ansi}
-              <span class="flex-1 truncate">{@html ansiToHTML(e.ansi)}</span>
-            {:else if highlightRe}
-              <span class="flex-1 truncate">{@html highlightMsg(e.msg ?? "")}</span>
-            {:else}
-              <span class="flex-1 truncate">{e.msg ?? ""}</span>
-            {/if}
+            <LogRow
+              entry={e}
+              {columns}
+              {showTimestamps}
+              {levelClass}
+              {sourceName}
+              {fmtTs}
+              onSourceClick={(_ev, name) => addFilterClause(`source:${quoteIfNeeded(name)}`)}
+              msgHTML={(en) => en.text && en.ansi ? { html: ansiToHTML(en.ansi) }
+                              : highlightRe ? { html: highlightMsg(en.msg ?? "") }
+                              : (en.msg ?? "")} />
           </div>
         </div>
       {/each}
@@ -1234,10 +1253,20 @@
 
 <svelte:window onkeydown={onGlobalKey} />
 
+{#if showColumnsMenu}
+  <ColumnsMenu
+    {columns}
+    {discoveredFields}
+    {hotColumns}
+    onChange={onColumnsChange}
+    onClose={() => (showColumnsMenu = false)} />
+{/if}
+
 {#if showSaveProfile}
   <SaveProfileModal
     initialName={activeProfile && profiles.some((p) => p.name === activeProfile) ? "" : activeProfile}
     initialFilter={filter}
+    initialColumns={toProfileIDs(columns)}
     onClose={() => (showSaveProfile = false)}
     onSaved={async (name, path) => {
       await refreshProfiles();
