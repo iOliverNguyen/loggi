@@ -1,7 +1,14 @@
 <script lang="ts">
+  import { tick } from "svelte";
   import Icon from "./Icon.svelte";
 
   let { onClose } = $props<{ onClose: () => void }>();
+  let dialogEl: HTMLDivElement | null = $state(null);
+  // Focus the dialog on mount so keystrokes (←/→ / 1/2/3 / Esc) reach our
+  // onkeydown handler instead of being swallowed by the document body.
+  $effect(() => {
+    if (dialogEl) tick().then(() => dialogEl?.focus());
+  });
   type Tab = "keys" | "syntax" | "examples";
   const TABS: { id: Tab; label: string }[] = [
     { id: "keys", label: "Shortcuts" },
@@ -115,7 +122,8 @@
   onclick={onClose}
   onkeydown={onKey}>
   <div
-    class="bg-white dark:bg-zinc-900 rounded-lg shadow-xl w-[560px] max-h-[80vh] flex flex-col text-sm"
+    bind:this={dialogEl}
+    class="bg-white dark:bg-zinc-900 rounded-lg shadow-xl w-[560px] max-h-[80vh] flex flex-col text-sm outline-none"
     role="dialog"
     tabindex="-1"
     onclick={(e) => e.stopPropagation()}
@@ -131,7 +139,7 @@
       </button>
     </header>
 
-    <nav class="flex border-b border-zinc-200 dark:border-zinc-800 px-2" role="tablist">
+    <div class="flex border-b border-zinc-200 dark:border-zinc-800 px-2" role="tablist">
       {#each TABS as t, i}
         <button
           role="tab"
@@ -148,7 +156,7 @@
         </button>
       {/each}
       <span class="ml-auto self-center text-[10px] text-zinc-400 mono pr-1">← →</span>
-    </nav>
+    </div>
 
     <div class="flex-1 overflow-y-auto p-4">
       {#if tab === "keys"}

@@ -7,15 +7,19 @@
     OP_LABELS,
     defaultOpsForField,
   } from "./filter-dsl";
+  import Icon from "./Icon.svelte";
+  import Combobox from "./Combobox.svelte";
 
   let {
     expression,
     discoveredFields,
     onApply,
+    onShowHelp,
   } = $props<{
     expression: string;
     discoveredFields: Set<string>;
     onApply: (expr: string) => void;
+    onShowHelp?: () => void;
   }>();
 
   // Built-in fields the server treats specially or always exposes.
@@ -105,10 +109,24 @@
 <div class="text-sm">
   <div class="flex items-center justify-between mb-2">
     <h2 class="font-semibold">Filters</h2>
-    <button
-      class="text-xs px-2 py-0.5 rounded bg-sky-600 text-white hover:bg-sky-700"
-      title="Add a filter clause"
-      onclick={() => (showAdd = !showAdd)}>+</button>
+    <div class="flex items-center gap-1">
+      {#if onShowHelp}
+        <button
+          class="p-1 rounded text-zinc-500 hover:text-sky-600 dark:hover:text-sky-400 hover:bg-zinc-200 dark:hover:bg-zinc-800"
+          title="Filter syntax help"
+          aria-label="filter help"
+          onclick={onShowHelp}>
+          <Icon name="help" size={12} />
+        </button>
+      {/if}
+      <button
+        class="p-1 rounded bg-sky-600 text-white hover:bg-sky-700"
+        title="Add a filter clause"
+        aria-label="add clause"
+        onclick={() => (showAdd = !showAdd)}>
+        <Icon name="plus" size={12} />
+      </button>
+    </div>
   </div>
 
   {#if parsed.advanced}
@@ -142,13 +160,14 @@
 
   {#if showAdd}
     <div class="rounded bg-zinc-100 dark:bg-zinc-900 p-2 mb-2 space-y-1.5">
-      <select
-        class="w-full px-1.5 py-1 rounded bg-white dark:bg-zinc-800 mono text-[11px]"
-        bind:value={newField}>
-        {#each columnOptions() as col}
-          <option value={col}>{col}</option>
-        {/each}
-      </select>
+      <Combobox
+        items={columnOptions().map((c) => ({ value: c, label: c }))}
+        value={newField}
+        placeholder="field"
+        searchPlaceholder="Search fields…"
+        title="Field (type to search)"
+        onChange={(v) => (newField = v)}
+        width="100%" />
       <div class="flex gap-1">
         <select
           class="px-1.5 py-1 rounded bg-white dark:bg-zinc-800 text-[11px]"

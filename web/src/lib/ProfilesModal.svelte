@@ -1,6 +1,10 @@
 <script lang="ts">
+  import { tick } from "svelte";
   import type { Profile } from "./types";
   import Icon from "./Icon.svelte";
+
+  let dialogEl: HTMLDivElement | null = $state(null);
+  $effect(() => { if (dialogEl) tick().then(() => dialogEl?.focus()); });
 
   let {
     profiles,
@@ -107,7 +111,8 @@
   onclick={onClose}
   onkeydown={(e) => e.key === "Escape" && onClose()}>
   <div
-    class="bg-white dark:bg-zinc-900 rounded-lg shadow-xl w-[560px] max-h-[80vh] flex flex-col text-sm"
+    bind:this={dialogEl}
+    class="bg-white dark:bg-zinc-900 rounded-lg shadow-xl w-[560px] max-h-[80vh] flex flex-col text-sm outline-none"
     role="dialog"
     tabindex="-1"
     onclick={(e) => e.stopPropagation()}

@@ -32,6 +32,16 @@
   let open = $state(false);
   let highlight = $state(0);
   let panelEl: HTMLDivElement | null = $state(null);
+  let panelPos = $state({ left: 0, top: 0, width: 0 });
+
+  // Compute fixed-positioned coords from the input's bounding rect so the
+  // panel escapes the header's stacking context (otherwise the log-list
+  // stripes paint over it). Recomputed on open / scroll / resize.
+  function place() {
+    if (!inputEl) return;
+    const r = inputEl.getBoundingClientRect();
+    panelPos = { left: r.left, top: r.bottom + 4, width: r.width };
+  }
 
   // Word at caret = the whitespace-bounded chunk under the cursor.
   function wordAt(s: string, caret: number): { word: string; start: number; end: number } {
@@ -87,6 +97,7 @@
   $effect(() => {
     open = suggestions.length > 0 && document.activeElement === inputEl;
     highlight = 0;
+    if (open) place();
   });
 
   // Keyboard handler attached to the parent input via inputEl.
@@ -153,12 +164,13 @@
   });
 </script>
 
-<svelte:window onclick={onWinClick} />
+<svelte:window onclick={onWinClick} onresize={place} onscroll={place} />
 
 {#if open && suggestions.length > 0}
   <div
     bind:this={panelEl}
-    class="absolute z-30 left-0 right-0 mt-1 rounded-md shadow-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 max-h-64 overflow-y-auto text-xs"
+    class="fixed z-[60] rounded-md shadow-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 max-h-64 overflow-y-auto text-xs"
+    style={`left:${panelPos.left}px;top:${panelPos.top}px;width:${panelPos.width}px`}
     role="listbox">
     <div class="px-2.5 py-1 border-b border-zinc-200 dark:border-zinc-800 text-[10px] text-zinc-500 mono flex items-center justify-between">
       <span>suggestions</span>

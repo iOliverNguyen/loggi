@@ -921,7 +921,8 @@
         onApply={(expr) => {
           pendingFilter = expr;
           applyFilter();
-        }} />
+        }}
+        onShowHelp={() => (showHelp = true)} />
       <div class="border-t border-zinc-200 dark:border-zinc-800 my-3"></div>
 
       <div class="flex items-center justify-between mb-2">

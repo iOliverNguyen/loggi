@@ -9,6 +9,23 @@
   }>();
 
   let hoverId = $state<string | null>(null);
+  let containerAnchors = $state<Record<string, HTMLDivElement>>({});
+  let hoveredContainer = $derived(
+    hoverId ? dockerList.find((c) => c.id === hoverId) ?? null : null,
+  );
+
+  // Window-level keyboard handler so ←/→ work even when no element inside
+  // the picker has focus (the per-element onkeydown only fires for events
+  // bubbling from a focused descendant). Skipped while the user types in
+  // the search box — we don't want to steal their cursor keys.
+  function onWinKey(e: KeyboardEvent) {
+    const t = e.target as HTMLElement | null;
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) return;
+    if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+      e.preventDefault();
+      tab = tab === "docker" ? "file" : "docker";
+    }
+  }
 
   type Kind = "file" | "docker";
   type Container = {
@@ -88,20 +105,12 @@
   let runningSet = $derived(new Set(dockerList.flatMap((c) => c.names)));
 </script>
 
+<svelte:window onkeydown={onWinKey} />
+
 <div
   class="rounded bg-zinc-100 dark:bg-zinc-900 p-2 mb-3 text-xs"
   role="tabpanel"
-  onkeydown={(e) => {
-    // ←/→ cycles between Docker / File tabs while focus is anywhere inside.
-    if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
-      const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) return;
-      e.preventDefault();
-      tab = tab === "docker" ? "file" : "docker";
-    } else if (e.key === "Escape") {
-      onClose();
-    }
-  }}>
+  onkeydown={(e) => { if (e.key === "Escape") onClose(); }}>
   <!-- tabs -->
   <div class="flex gap-1 mb-2 border-b border-zinc-200 dark:border-zinc-800 -mx-2 px-2" role="tablist">
     <button
@@ -162,6 +171,7 @@
             <div class="group relative flex items-center gap-1 px-1 py-0.5 rounded hover:bg-zinc-200 dark:hover:bg-zinc-800 cursor-pointer"
                  role="button"
                  tabindex="0"
+                 bind:this={containerAnchors[c.id]}
                  onclick={() => addContainer(name)}
                  onkeydown={(e) => e.key === "Enter" && addContainer(name)}
                  onmouseenter={() => (hoverId = c.id)}
@@ -176,11 +186,11 @@
                   e.stopPropagation();
                   togglePin("docker", name);
                 }}>{savedContainers.includes(name) ? "★" : "☆"}</button>
-              {#if hoverId === c.id}
-                <DockerHoverCard container={c} />
-              {/if}
             </div>
           {/each}
+          {#if hoverId && hoveredContainer}
+            <DockerHoverCard container={hoveredContainer} anchor={containerAnchors[hoverId] ?? null} />
+          {/if}
           {#if !dockerLoading && filteredContainers.length === 0}
             <div class="text-zinc-500 text-[11px] py-2 text-center">no running containers</div>
           {/if}
