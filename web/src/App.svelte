@@ -20,6 +20,7 @@
   import SaveQuickModal from "./lib/SaveQuickModal.svelte";
   import SettingsModal from "./lib/SettingsModal.svelte";
   import { requestSaveQuick, QUICK_PROMPT, persistQuickChips, DEFAULT_CHIPS } from "./lib/quick-filters";
+  import { parseClauses } from "./lib/filter-dsl";
   import {
     readSessionFromHash,
     clearAddress,
@@ -511,6 +512,16 @@
     const next = pendingFilter.trim();
     pendingFilter = next ? `${next} ${clause}` : clause;
     applyFilter();
+  }
+
+  let activeFilterFields = $derived.by(() => {
+    const set = new Set<string>();
+    const r = parseClauses(filter);
+    if (!r.advanced) for (const c of r.clauses) set.add(c.field);
+    return set;
+  });
+  function isPathFiltered(p: string[]): boolean {
+    return activeFilterFields.has(p.join("."));
   }
   let filterInputEl: HTMLInputElement | null = $state(null);
   let showHelp = $state(false);
@@ -1183,7 +1194,8 @@
         entry={selectedEntry}
         {sources}
         onClose={closePanel}
-        onAddFilter={addFilterClause} />
+        onAddFilter={addFilterClause}
+        {isPathFiltered} />
     {/if}
   </div>
 

@@ -3,10 +3,11 @@
   import Self from "./JsonTree.svelte";
   import Icon from "./Icon.svelte";
 
-  let { value, path = [], onAddFilter, depth = 0 } = $props<{
+  let { value, path = [], onAddFilter, isPathFiltered, depth = 0 } = $props<{
     value: unknown;
     path?: string[];
-    onAddFilter?: (p: string[], v: unknown, negate: boolean) => void;
+    onAddFilter?: (p: string[], v: unknown, negate: boolean, op?: "eq" | "exists") => void;
+    isPathFiltered?: (p: string[]) => boolean;
     depth?: number;
   }>();
 
@@ -58,35 +59,67 @@
       <ul class="ml-4 border-l border-zinc-200 dark:border-zinc-800 pl-2">
         {#each entries(value) as [k, v]}
           {@const childPath = [...path, k]}
-          <li class="group flex items-start gap-1 leading-5 hover:bg-sky-50 dark:hover:bg-sky-950/40 hover:ring-1 hover:ring-sky-200 dark:hover:ring-sky-900 rounded px-1 -mx-1 transition-colors">
+          {@const isLeaf = typeof v === "string" || typeof v === "number" || typeof v === "boolean"}
+          {@const filtered = isPathFiltered?.(childPath) ?? false}
+          <li
+            class="group flex items-start gap-1 leading-5 hover:bg-sky-50 dark:hover:bg-sky-950/40 hover:ring-1 hover:ring-sky-200 dark:hover:ring-sky-900 rounded px-1 -mx-1 transition-colors"
+            class:bg-sky-100={filtered}
+            class:dark:bg-sky-900={filtered}
+            class:ring-1={filtered}
+            class:ring-sky-300={filtered}
+            class:dark:ring-sky-800={filtered}>
             <span class="text-violet-700 dark:text-violet-300 shrink-0">{k}</span>
             <span class="text-zinc-400 shrink-0">:</span>
             <div class="flex-1 min-w-0">
-              <Self value={v} path={childPath} {onAddFilter} depth={depth + 1} />
+              <Self value={v} path={childPath} {onAddFilter} {isPathFiltered} depth={depth + 1} />
             </div>
-            {#if onAddFilter && (typeof v === "string" || typeof v === "number" || typeof v === "boolean")}
+            {#if onAddFilter}
               <span class="opacity-0 group-hover:opacity-100 transition-opacity flex gap-0.5 shrink-0">
-                <button
-                  class="p-0.5 rounded text-emerald-700 dark:text-emerald-400 hover:bg-emerald-600/15"
-                  title={`filter ${fieldRef(childPath)}:${valueLiteral(v)}`}
-                  onclick={() => onAddFilter(childPath, v, false)}
-                  aria-label="add filter">
-                  <Icon name="plus" size={12} />
-                </button>
-                <button
-                  class="p-0.5 rounded text-rose-700 dark:text-rose-400 hover:bg-rose-600/15"
-                  title={`filter -${fieldRef(childPath)}:${valueLiteral(v)}`}
-                  onclick={() => onAddFilter(childPath, v, true)}
-                  aria-label="exclude filter">
-                  <Icon name="minus" size={12} />
-                </button>
-                <button
-                  class="p-0.5 rounded text-zinc-500 hover:bg-zinc-200 dark:hover:bg-zinc-800 hover:text-zinc-800 dark:hover:text-zinc-200"
-                  title="copy value"
-                  onclick={() => copy(typeof v === "string" ? v : String(v))}
-                  aria-label="copy value">
-                  <Icon name="copy" size={12} />
-                </button>
+                {#if isLeaf}
+                  <button
+                    class="p-0.5 rounded text-emerald-700 dark:text-emerald-400 hover:bg-emerald-600/15"
+                    title={`filter ${fieldRef(childPath)}:${valueLiteral(v)}`}
+                    onclick={() => onAddFilter(childPath, v, false)}
+                    aria-label="add filter">
+                    <Icon name="plus" size={12} />
+                  </button>
+                  <button
+                    class="p-0.5 rounded text-rose-700 dark:text-rose-400 hover:bg-rose-600/15"
+                    title={`filter -${fieldRef(childPath)}:${valueLiteral(v)}`}
+                    onclick={() => onAddFilter(childPath, v, true)}
+                    aria-label="exclude filter">
+                    <Icon name="minus" size={12} />
+                  </button>
+                  <button
+                    class="p-0.5 rounded text-zinc-500 hover:bg-zinc-200 dark:hover:bg-zinc-800 hover:text-zinc-800 dark:hover:text-zinc-200"
+                    title="copy value"
+                    onclick={() => copy(typeof v === "string" ? v : String(v))}
+                    aria-label="copy value">
+                    <Icon name="copy" size={12} />
+                  </button>
+                {:else}
+                  <button
+                    class="p-0.5 rounded text-emerald-700 dark:text-emerald-400 hover:bg-emerald-600/15"
+                    title={`filter ${fieldRef(childPath)}:* (field is set)`}
+                    onclick={() => onAddFilter(childPath, undefined, false, "exists")}
+                    aria-label="filter field is set">
+                    <Icon name="plus" size={12} />
+                  </button>
+                  <button
+                    class="p-0.5 rounded text-rose-700 dark:text-rose-400 hover:bg-rose-600/15"
+                    title={`filter -${fieldRef(childPath)}:* (field is not set)`}
+                    onclick={() => onAddFilter(childPath, undefined, true, "exists")}
+                    aria-label="filter field is not set">
+                    <Icon name="minus" size={12} />
+                  </button>
+                  <button
+                    class="p-0.5 rounded text-zinc-500 hover:bg-zinc-200 dark:hover:bg-zinc-800 hover:text-zinc-800 dark:hover:text-zinc-200"
+                    title="copy path"
+                    onclick={() => copy(fieldRef(childPath))}
+                    aria-label="copy path">
+                    <Icon name="copy" size={12} />
+                  </button>
+                {/if}
               </span>
             {/if}
           </li>

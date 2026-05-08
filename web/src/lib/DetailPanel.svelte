@@ -3,11 +3,12 @@
   import { ansiToHTML } from "./ansi";
   import JsonTree from "./JsonTree.svelte";
 
-  let { entry, sources, onClose, onAddFilter } = $props<{
+  let { entry, sources, onClose, onAddFilter, isPathFiltered } = $props<{
     entry: Entry;
     sources: SourceInfo[];
     onClose: () => void;
     onAddFilter: (clause: string) => void;
+    isPathFiltered?: (p: string[]) => boolean;
   }>();
 
   let width = $state(parseInt(localStorage.getItem("loggi.panel.width") ?? "480", 10));
@@ -76,8 +77,9 @@
     return "@" + p.join(".");
   }
 
-  function onAddField(path: string[], v: unknown, negate: boolean) {
-    const clause = `${negate ? "-" : ""}${fieldRef(path)}:${valueLiteral(v)}`;
+  function onAddField(path: string[], v: unknown, negate: boolean, op: "eq" | "exists" = "eq") {
+    const rhs = op === "exists" ? "*" : valueLiteral(v);
+    const clause = `${negate ? "-" : ""}${fieldRef(path)}:${rhs}`;
     onAddFilter(clause);
   }
 
@@ -199,7 +201,7 @@
       <section>
         <h3 class="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold mb-1">Fields</h3>
         <div class="bg-zinc-50 dark:bg-zinc-900 rounded p-2 overflow-x-auto">
-          <JsonTree value={entry.fields} onAddFilter={onAddField} depth={1} />
+          <JsonTree value={entry.fields} onAddFilter={onAddField} {isPathFiltered} depth={1} />
         </div>
       </section>
     {/if}
