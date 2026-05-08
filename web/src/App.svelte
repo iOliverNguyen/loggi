@@ -963,6 +963,16 @@
       {/if}
     </div>
     <button
+      class={showTimeline
+        ? "p-1.5 rounded bg-sky-600 text-white hover:bg-sky-700"
+        : iconBtnCls}
+      title={showTimeline ? "Hide timeline strip" : "Show timeline strip"}
+      aria-label="toggle timeline"
+      aria-pressed={showTimeline}
+      onclick={() => (showTimeline = !showTimeline)}>
+      <Icon name="chart-bar" size={16} />
+    </button>
+    <button
       class={iconBtnCls}
       title={`Density: ${density} (click to cycle)`}
       aria-label="cycle density"

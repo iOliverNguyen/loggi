@@ -8,7 +8,8 @@
     | "settings" | "sun" | "moon" | "monitor" | "help" | "search"
     | "filter" | "columns" | "rows" | "pin" | "plus" | "minus" | "x"
     | "refresh" | "copy" | "edit" | "check" | "chevron-down"
-    | "chevron-right" | "star" | "star-filled" | "diff" | "link";
+    | "chevron-right" | "star" | "star-filled" | "diff" | "link"
+    | "chart-bar";
 
   let { name, size = 16, class: cls = "" } = $props<{
     name: IconName;
@@ -46,6 +47,7 @@
     "star-filled": "M12 2l3.09 6.26L22 9.27l-5 4.87L18.18 22 12 18.27 5.82 22 7 14.14 2 9.27l6.91-1.01L12 2z",
     diff: "M6 3v12M18 9v12M9 6l9 9M15 18l-9-9",
     link: "M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71",
+    "chart-bar": "M3 21V10M9 21V4M15 21V13M21 21V7M2 21h20",
   };
 
   let path = $derived(PATHS[name as IconName]);
