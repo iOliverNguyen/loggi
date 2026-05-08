@@ -15,6 +15,8 @@
   import DiffModal from "./lib/DiffModal.svelte";
   import Icon from "./lib/Icon.svelte";
   import RowContextMenu from "./lib/RowContextMenu.svelte";
+  import Combobox from "./lib/Combobox.svelte";
+  import FilterAutocomplete from "./lib/FilterAutocomplete.svelte";
   import {
     readSessionFromHash,
     clearAddress,
@@ -664,6 +666,31 @@
       openDiff();
       return;
     }
+    // Alt+1..9 switches profile by index (skips silently if out of range).
+    if (e.altKey && /^[1-9]$/.test(e.key)) {
+      const idx = parseInt(e.key, 10) - 1;
+      if (idx < profiles.length) {
+        e.preventDefault();
+        selectProfile(profiles[idx].name);
+      }
+      return;
+    }
+    // Shift+1..9 applies the Nth saved quick filter (in display order).
+    if (e.shiftKey && /^[!@#$%^&*(]$/.test(e.key)) {
+      // shift maps 1→! 2→@ 3→# 4→$ 5→% 6→^ 7→& 8→* 9→(
+      const idx = "!@#$%^&*(".indexOf(e.key);
+      if (idx >= 0) {
+        try {
+          const raw = localStorage.getItem("loggi.quick");
+          const chips = raw ? JSON.parse(raw) : [];
+          if (idx < chips.length) {
+            e.preventDefault();
+            quickLevel(chips[idx].expr);
+          }
+        } catch {}
+      }
+      return;
+    }
   }
 
   function onScroll() {
@@ -711,18 +738,17 @@
     </span>
 
     {#if profiles.length > 0}
-      <div class="flex items-center">
-        <select
-          class="pl-2 pr-1 py-1 rounded-l bg-zinc-100 dark:bg-zinc-800 text-sm border border-transparent focus:border-sky-500 outline-none"
+      <div class="flex items-center gap-px">
+        <Combobox
+          items={profiles.map((p) => ({ value: p.name, label: p.name, hint: p.filter }))}
           value={activeProfile}
-          onchange={(e) => selectProfile((e.currentTarget as HTMLSelectElement).value)}>
-          {#each profiles as p}
-            <option value={p.name}>{p.name}</option>
-          {/each}
-        </select>
+          placeholder="profile"
+          searchPlaceholder="Search profiles…"
+          title="Profile (type to search)"
+          onChange={(v) => selectProfile(v)} />
         <button
-          class="px-1.5 py-1 rounded-r bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100 border-l border-zinc-200 dark:border-zinc-700"
-          title="manage profiles"
+          class="px-1.5 py-1 rounded bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
+          title="Manage profiles"
           aria-label="manage profiles"
           onclick={() => (showProfilesModal = true)}>
           <Icon name="settings" size={14} />
@@ -737,9 +763,14 @@
       <input
         bind:this={filterInputEl}
         class="w-full bg-zinc-100 dark:bg-zinc-900 pl-8 pr-3 py-1.5 rounded mono text-sm border border-transparent focus:border-sky-500 outline-none"
-        placeholder="filter — / to focus · ? for help"
+        placeholder="filter — / to focus · Tab to autocomplete · ? for help"
         bind:value={pendingFilter}
         onkeydown={(e) => e.key === "Enter" && applyFilter()} />
+      <FilterAutocomplete
+        inputEl={filterInputEl}
+        value={pendingFilter}
+        {discoveredFields}
+        onChange={(v) => (pendingFilter = v)} />
     </div>
 
     <button
@@ -747,9 +778,12 @@
       onclick={applyFilter}>Apply</button>
 
     <button
-      class={iconBtnCls}
-      title={paused ? "Resume (Space)" : "Pause (Space)"}
+      class={paused
+        ? "p-1.5 rounded bg-amber-500 text-white hover:bg-amber-600"
+        : "p-1.5 rounded bg-emerald-600 text-white hover:bg-emerald-700"}
+      title={paused ? "Paused — click to resume (Space)" : "Live — click to pause (Space)"}
       aria-label={paused ? "Resume" : "Pause"}
+      aria-pressed={paused}
       onclick={togglePause}>
       <Icon name={paused ? "play" : "pause"} size={16} />
     </button>

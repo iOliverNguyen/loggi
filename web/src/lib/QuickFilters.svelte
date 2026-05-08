@@ -112,12 +112,26 @@
 
 <div
   bind:this={containerEl}
-  class="px-4 py-1.5 border-b border-zinc-200 dark:border-zinc-800 flex items-center gap-2 text-xs">
+  class="px-4 py-1.5 border-b border-zinc-200 dark:border-zinc-800 flex items-center gap-2 text-xs"
+  onkeydown={(e) => {
+    // Arrow keys navigate the chip row when focus is on a chip.
+    const t = e.target as HTMLElement | null;
+    if (!t || t.tagName !== "BUTTON") return;
+    if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+      const buttons = Array.from(listEl?.querySelectorAll<HTMLButtonElement>("button[data-chip]") ?? []);
+      const idx = buttons.indexOf(t as HTMLButtonElement);
+      if (idx === -1) return;
+      e.preventDefault();
+      const next = e.key === "ArrowRight" ? (idx + 1) % buttons.length : (idx - 1 + buttons.length) % buttons.length;
+      buttons[next]?.focus();
+    }
+  }}>
   <span class="text-zinc-500 shrink-0">Quick:</span>
   <div bind:this={listEl} class="flex items-center gap-1.5 min-w-0 flex-1 overflow-hidden">
-    {#each visible as c (c.label)}
+    {#each visible as c, i (c.label)}
       <span class="group relative inline-flex items-center">
         <button
+          data-chip
           class="px-2 py-0.5 rounded text-[11px] mono whitespace-nowrap transition-colors"
           class:bg-sky-600={isActive(c.expr)}
           class:text-white={isActive(c.expr)}
@@ -125,7 +139,7 @@
           class:dark:bg-zinc-800={!isActive(c.expr)}
           class:hover:bg-zinc-200={!isActive(c.expr)}
           class:dark:hover:bg-zinc-700={!isActive(c.expr)}
-          title={c.expr || "no filter"}
+          title={`${c.expr || "no filter"}${i < 9 ? ` (Shift+${i + 1})` : ""}`}
           onclick={() => onApply(c.expr)}>{c.label}</button>
         <button
           class="opacity-0 group-hover:opacity-100 absolute -top-1 -right-1 w-3.5 h-3.5 rounded-full bg-zinc-700 dark:bg-zinc-200 text-white dark:text-zinc-900 text-[9px] flex items-center justify-center"

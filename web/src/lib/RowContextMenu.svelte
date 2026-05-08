@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from "svelte";
   import Icon from "./Icon.svelte";
   import type { Entry } from "./types";
 
@@ -58,6 +59,36 @@
     pos = { x: Math.max(pad, nx), y: Math.max(pad, ny) };
   });
 
+  // Focus the first menu item once positioned, so ArrowDown/ArrowUp navigate
+  // the menu naturally and Enter activates the focused item.
+  $effect(() => {
+    if (!el) return;
+    tick().then(() => {
+      const first = el!.querySelector<HTMLButtonElement>("button");
+      first?.focus();
+    });
+  });
+
+  function onMenuKey(e: KeyboardEvent) {
+    if (!el) return;
+    if (e.key === "Escape") {
+      e.preventDefault();
+      onClose();
+      return;
+    }
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp" && e.key !== "Home" && e.key !== "End") return;
+    e.preventDefault();
+    const buttons = Array.from(el.querySelectorAll<HTMLButtonElement>("button:not([disabled])"));
+    if (buttons.length === 0) return;
+    const cur = buttons.indexOf(document.activeElement as HTMLButtonElement);
+    let next = cur;
+    if (e.key === "ArrowDown") next = cur < 0 ? 0 : (cur + 1) % buttons.length;
+    else if (e.key === "ArrowUp") next = cur < 0 ? buttons.length - 1 : (cur - 1 + buttons.length) % buttons.length;
+    else if (e.key === "Home") next = 0;
+    else if (e.key === "End") next = buttons.length - 1;
+    buttons[next]?.focus();
+  }
+
   function quoteIfNeeded(v: string): string {
     return /[\s:()\[\]"\\*]/.test(v)
       ? `"${v.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`
@@ -85,7 +116,7 @@
   tabindex="-1"
   onclick={(e) => e.stopPropagation()}
   oncontextmenu={(e) => e.stopPropagation()}
-  onkeydown={(e) => e.stopPropagation()}>
+  onkeydown={(e) => { e.stopPropagation(); onMenuKey(e); }}>
 
   <button class="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 inline-flex items-center gap-2"
           onclick={() => fire(onOpenDetail)}>

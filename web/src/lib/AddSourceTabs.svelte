@@ -88,10 +88,25 @@
   let runningSet = $derived(new Set(dockerList.flatMap((c) => c.names)));
 </script>
 
-<div class="rounded bg-zinc-100 dark:bg-zinc-900 p-2 mb-3 text-xs">
+<div
+  class="rounded bg-zinc-100 dark:bg-zinc-900 p-2 mb-3 text-xs"
+  role="tabpanel"
+  onkeydown={(e) => {
+    // ←/→ cycles between Docker / File tabs while focus is anywhere inside.
+    if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) return;
+      e.preventDefault();
+      tab = tab === "docker" ? "file" : "docker";
+    } else if (e.key === "Escape") {
+      onClose();
+    }
+  }}>
   <!-- tabs -->
-  <div class="flex gap-1 mb-2 border-b border-zinc-200 dark:border-zinc-800 -mx-2 px-2">
+  <div class="flex gap-1 mb-2 border-b border-zinc-200 dark:border-zinc-800 -mx-2 px-2" role="tablist">
     <button
+      role="tab"
+      aria-selected={tab === "docker"}
       class="px-3 py-1 -mb-px border-b-2 transition-colors"
       class:border-sky-500={tab === "docker"}
       class:text-sky-600={tab === "docker"}
@@ -100,6 +115,8 @@
       class:text-zinc-500={tab !== "docker"}
       onclick={() => (tab = "docker")}>Docker</button>
     <button
+      role="tab"
+      aria-selected={tab === "file"}
       class="px-3 py-1 -mb-px border-b-2 transition-colors"
       class:border-sky-500={tab === "file"}
       class:text-sky-600={tab === "file"}
@@ -108,9 +125,10 @@
       class:text-zinc-500={tab !== "file"}
       onclick={() => (tab = "file")}>File</button>
     <span class="flex-1"></span>
+    <span class="self-center text-[10px] text-zinc-400 mono mr-1">←→ switch</span>
     <button
       class="text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 px-2"
-      title="close"
+      title="close (Esc)"
       onclick={onClose}>×</button>
   </div>
 

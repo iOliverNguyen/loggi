@@ -2,22 +2,53 @@
   import Icon from "./Icon.svelte";
 
   let { onClose } = $props<{ onClose: () => void }>();
-  let tab = $state<"keys" | "syntax" | "examples">("keys");
+  type Tab = "keys" | "syntax" | "examples";
+  const TABS: { id: Tab; label: string }[] = [
+    { id: "keys", label: "Shortcuts" },
+    { id: "syntax", label: "Filter syntax" },
+    { id: "examples", label: "Examples" },
+  ];
+  let tab = $state<Tab>("keys");
+
+  // Modal-level keyboard nav: ←/→ or [ / ] to switch tabs; 1/2/3 jumps
+  // directly. Tab is left to the browser for focus traversal between
+  // interactive elements within the modal.
+  function onKey(e: KeyboardEvent) {
+    if (e.key === "Escape") {
+      onClose();
+      return;
+    }
+    const idx = TABS.findIndex((t) => t.id === tab);
+    if (e.key === "ArrowRight" || e.key === "]") {
+      e.preventDefault();
+      tab = TABS[(idx + 1) % TABS.length].id;
+    } else if (e.key === "ArrowLeft" || e.key === "[") {
+      e.preventDefault();
+      tab = TABS[(idx - 1 + TABS.length) % TABS.length].id;
+    } else if (e.key >= "1" && e.key <= String(TABS.length)) {
+      e.preventDefault();
+      tab = TABS[parseInt(e.key, 10) - 1].id;
+    }
+  }
 
   const SHORTCUTS: { keys: string[]; label: string }[] = [
     { keys: ["/"], label: "focus filter" },
+    { keys: ["Tab"], label: "accept filter autocomplete suggestion" },
     { keys: ["⌘F"], label: "highlight substring in messages" },
     { keys: ["Esc"], label: "blur input · close panel · close overlay" },
     { keys: ["j", "k"], label: "row down / up" },
     { keys: ["g", "G"], label: "jump to top / bottom" },
     { keys: ["Enter"], label: "open detail panel" },
     { keys: ["Space"], label: "pause / resume" },
-    { keys: ["right-click"], label: "row context menu" },
+    { keys: ["right-click"], label: "row context menu (↑↓ to navigate, Enter to fire)" },
     { keys: ["⌘L"], label: "copy share URL" },
     { keys: ["⌘C"], label: "copy selected rows as JSONL" },
     { keys: ["p"], label: "pin / unpin row" },
     { keys: ["d"], label: "diff 2 selected rows" },
     { keys: ["⌘click", "⇧click"], label: "multi-select" },
+    { keys: ["⌥1", "⌥9"], label: "switch profile by index" },
+    { keys: ["⇧1", "⇧9"], label: "apply Nth saved quick filter" },
+    { keys: ["←", "→"], label: "switch tabs (in modals / source picker)" },
     { keys: ["?"], label: "this overlay" },
   ];
 
@@ -82,13 +113,13 @@
   role="button"
   tabindex="-1"
   onclick={onClose}
-  onkeydown={(e) => e.key === "Escape" && onClose()}>
+  onkeydown={onKey}>
   <div
     class="bg-white dark:bg-zinc-900 rounded-lg shadow-xl w-[560px] max-h-[80vh] flex flex-col text-sm"
     role="dialog"
     tabindex="-1"
     onclick={(e) => e.stopPropagation()}
-    onkeydown={(e) => e.stopPropagation()}>
+    onkeydown={(e) => { e.stopPropagation(); onKey(e); }}>
 
     <header class="flex items-center justify-between px-4 py-2.5 border-b border-zinc-200 dark:border-zinc-800">
       <h2 class="font-semibold">Help</h2>
@@ -100,17 +131,23 @@
       </button>
     </header>
 
-    <nav class="flex border-b border-zinc-200 dark:border-zinc-800 px-2">
-      {#each [["keys", "Shortcuts"], ["syntax", "Filter syntax"], ["examples", "Examples"]] as [key, label]}
+    <nav class="flex border-b border-zinc-200 dark:border-zinc-800 px-2" role="tablist">
+      {#each TABS as t, i}
         <button
-          class="px-3 py-2 -mb-px border-b-2 text-xs transition-colors"
-          class:border-sky-500={tab === key}
-          class:text-sky-600={tab === key}
-          class:dark:text-sky-400={tab === key}
-          class:border-transparent={tab !== key}
-          class:text-zinc-500={tab !== key}
-          onclick={() => (tab = key as any)}>{label}</button>
+          role="tab"
+          aria-selected={tab === t.id}
+          class="px-3 py-2 -mb-px border-b-2 text-xs transition-colors inline-flex items-center gap-1.5"
+          class:border-sky-500={tab === t.id}
+          class:text-sky-600={tab === t.id}
+          class:dark:text-sky-400={tab === t.id}
+          class:border-transparent={tab !== t.id}
+          class:text-zinc-500={tab !== t.id}
+          onclick={() => (tab = t.id)}>
+          {t.label}
+          <kbd class="mono text-[9px] px-1 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-500">{i + 1}</kbd>
+        </button>
       {/each}
+      <span class="ml-auto self-center text-[10px] text-zinc-400 mono pr-1">← →</span>
     </nav>
 
     <div class="flex-1 overflow-y-auto p-4">
