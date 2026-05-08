@@ -549,6 +549,48 @@
       if (Array.isArray(j?.hot)) hotColumns = j.hot;
     }).catch(() => {});
   });
+
+  // Refresh per-source health stats every 5s. Merges only the rate_ewma /
+  // last_ingest_ts / line_count fields so client-side state mutations
+  // (e.g. "closing") aren't overwritten by the poll.
+  $effect(() => {
+    const id = setInterval(async () => {
+      try {
+        const r = await fetch("/api/sources");
+        if (!r.ok) return;
+        const fresh = (await r.json()) as SourceInfo[];
+        const byId = new Map(fresh.map((s) => [s.id, s]));
+        sources = sources.map((s) => {
+          const f = byId.get(s.id);
+          if (!f) return s;
+          return {
+            ...s,
+            rate_ewma: f.rate_ewma,
+            last_ingest_ts: f.last_ingest_ts,
+            line_count: f.line_count,
+          };
+        });
+      } catch {}
+    }, 5000);
+    return () => clearInterval(id);
+  });
+
+  function sourceHealthDot(s: SourceInfo): { cls: string; title: string } {
+    const last = s.last_ingest_ts ?? 0;
+    if (s.state !== "open") return { cls: "bg-zinc-400", title: s.state };
+    if (!last) return { cls: "bg-zinc-400", title: "no lines yet" };
+    const age = Math.max(0, Date.now() / 1000 - last);
+    const ago = age < 60 ? `${Math.round(age)}s` : age < 3600 ? `${Math.round(age / 60)}m` : `${(age / 3600).toFixed(1)}h`;
+    if (age < 30) return { cls: "bg-emerald-500", title: `last line ${ago} ago` };
+    if (age < 300) return { cls: "bg-amber-500", title: `last line ${ago} ago` };
+    return { cls: "bg-rose-500", title: `last line ${ago} ago — possibly stalled` };
+  }
+  function fmtRate(r?: number): string {
+    if (!r) return "0/s";
+    if (r < 0.1) return "<0.1/s";
+    if (r < 10) return r.toFixed(1) + "/s";
+    return Math.round(r) + "/s";
+  }
   function onColumnsChange(next: Column[]) { columns = next; }
   function visibleColumns(cols: Column[]): Column[] { return cols.filter((c) => c.visible); }
   let filterInputEl: HTMLInputElement | null = $state(null);
@@ -1121,9 +1163,12 @@
         </p>
       {/if}
       {#each sources as src}
+        {@const health = sourceHealthDot(src)}
         <div class="mb-2 group" class:opacity-50={src.state === "closing"}>
           <div class="flex items-center justify-between gap-1">
+            <span class={`shrink-0 w-1.5 h-1.5 rounded-full ${health.cls}`} title={health.title}></span>
             <div class="mono text-xs truncate flex-1" title={src.name}>{src.name}</div>
+            <span class="text-[10px] text-zinc-500 mono shrink-0" title={`${src.line_count ?? 0} lines total`}>{fmtRate(src.rate_ewma)}</span>
             <button
               class="opacity-0 group-hover:opacity-100 text-zinc-500 hover:text-red-500 disabled:hover:text-zinc-500 disabled:cursor-not-allowed"
               title={src.state === "closing" ? "Closing…" : "Remove"}

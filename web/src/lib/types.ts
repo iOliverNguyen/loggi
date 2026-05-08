@@ -20,6 +20,12 @@ export interface SourceInfo {
   // server's attach goroutine (e.g. "container not found", TTY decode
   // failure, etc.).
   detail?: string;
+  // Health stats refreshed by /api/sources poll. rate_ewma is lines/sec;
+  // last_ingest_ts is unix seconds (0 = never). line_count is the total
+  // number of lines ingested for this source since it was added.
+  rate_ewma?: number;
+  last_ingest_ts?: number;
+  line_count?: number;
 }
 
 // SourceEventWire mirrors the Go-side wire.SourceEvent shape (snake_case

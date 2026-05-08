@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"net"
 	"net/http"
 	"os"
@@ -112,6 +113,16 @@ type sourceRec struct {
 	// undetected.
 	mode  atomic.Pointer[string]
 	state string // "open" | "closed" | "error" — guarded by Server.srcMu
+
+	// Health stats. lineCount is the total number of lines ingested for
+	// this source; lastLineNs is the time.Now().UnixNano() at the most
+	// recent ingest; rateEWMA is the lines/sec exponential moving
+	// average (stored as float64 bits) recomputed by tickStats every
+	// second. All three are touched on the ingest hot path so they
+	// have to be lock-free.
+	lineCount  atomic.Uint64
+	lastLineNs atomic.Int64
+	rateEWMA   atomic.Uint64 // math.Float64bits(rate)
 }
 
 // modeStr returns the current mode or "" if undetected.
@@ -196,9 +207,44 @@ func (s *Server) Start() error {
 	go s.serveHTTP(hl)
 
 	go s.ingester()
+	go s.tickStats()
 
 	s.startIdleTimer()
 	return nil
+}
+
+// tickStats walks active sources every second and updates each one's
+// rate EWMA based on how many lines the ingester recorded since the
+// last tick. Drives the sidebar health badges.
+func (s *Server) tickStats() {
+	const alpha = 0.3 // weight on the latest 1s sample
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	prev := make(map[uint64]uint64)
+	var lastTick time.Time
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		case now := <-ticker.C:
+			elapsed := 1.0
+			if !lastTick.IsZero() {
+				elapsed = now.Sub(lastTick).Seconds()
+			}
+			lastTick = now
+			s.srcMu.RLock()
+			for id, rec := range s.srcs {
+				cur := rec.lineCount.Load()
+				delta := cur - prev[id]
+				prev[id] = cur
+				rate := float64(delta) / elapsed
+				old := math.Float64frombits(rec.rateEWMA.Load())
+				next := (1-alpha)*old + alpha*rate
+				rec.rateEWMA.Store(math.Float64bits(next))
+			}
+			s.srcMu.RUnlock()
+		}
+	}
 }
 
 // Shutdown stops listeners, sources, and the ingester.
@@ -341,12 +387,19 @@ func (s *Server) Sources() []SourceInfo {
 	defer s.srcMu.RUnlock()
 	out := make([]SourceInfo, 0, len(s.srcs))
 	for id, r := range s.srcs {
+		var lastUnix int64
+		if ns := r.lastLineNs.Load(); ns > 0 {
+			lastUnix = ns / 1e9
+		}
 		out = append(out, SourceInfo{
-			ID:    id,
-			Kind:  string(r.src.Kind()),
-			Name:  r.src.Name(),
-			Mode:  r.modeStr(),
-			State: r.state,
+			ID:           id,
+			Kind:         string(r.src.Kind()),
+			Name:         r.src.Name(),
+			Mode:         r.modeStr(),
+			State:        r.state,
+			RateEWMA:     math.Float64frombits(r.rateEWMA.Load()),
+			LastIngestTs: lastUnix,
+			LineCount:    r.lineCount.Load(),
 		})
 	}
 	return out
@@ -354,11 +407,14 @@ func (s *Server) Sources() []SourceInfo {
 
 // SourceInfo is the snapshot for a source.
 type SourceInfo struct {
-	ID    uint64 `json:"id"`
-	Kind  string `json:"kind"`
-	Name  string `json:"name"`
-	Mode  string `json:"mode"`
-	State string `json:"state"`
+	ID           uint64  `json:"id"`
+	Kind         string  `json:"kind"`
+	Name         string  `json:"name"`
+	Mode         string  `json:"mode"`
+	State        string  `json:"state"`
+	RateEWMA     float64 `json:"rate_ewma"`      // lines/sec, EWMA over 1s ticks
+	LastIngestTs int64   `json:"last_ingest_ts"` // unix seconds, 0 = never
+	LineCount    uint64  `json:"line_count"`
 }
 
 // ingester is the single goroutine that decodes raw lines into store rows.
@@ -387,6 +443,13 @@ func (s *Server) processLine(line source.RawLine) {
 			Level:    detectLevelHint(plain),
 		})
 	}
+	// Health bookkeeping — cheap atomics on the hot path.
+	s.srcMu.RLock()
+	if rec, ok := s.srcs[line.SourceID]; ok {
+		rec.lineCount.Add(1)
+		rec.lastLineNs.Store(time.Now().UnixNano())
+	}
+	s.srcMu.RUnlock()
 	if justSet {
 		// Broadcast so clients learn the mode without needing a fresh snapshot.
 		s.broadcastSourceState(line.SourceID, "open", "")
