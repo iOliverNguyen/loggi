@@ -274,6 +274,54 @@ export function defaultOpsForField(field: string): ClauseOp[] {
 
 export { BUILTIN_FIELDS };
 
+// Source mute / solo helpers — used by the sidebar M/S toggles.
+//
+// Mute appends a `-source:NAME` clause. Multiple sources can be muted
+// independently. Solo replaces any existing `source:X` (eq) clause with
+// `source:NAME` — solo is exclusive because the chip-friendly DSL only
+// supports implicit AND, so two solos would produce an empty result.
+
+export function isSourceMuted(expr: string, src: string): boolean {
+  const r = parseClauses(expr);
+  if (r.advanced) return false;
+  return r.clauses.some((c) => c.field === "source" && c.op === "neq" && c.value === src);
+}
+
+export function isSourceSoloed(expr: string, src: string): boolean {
+  const r = parseClauses(expr);
+  if (r.advanced) return false;
+  return r.clauses.some((c) => c.field === "source" && c.op === "eq" && c.value === src);
+}
+
+export function setSourceMuted(expr: string, src: string, muted: boolean): string {
+  const r = parseClauses(expr);
+  if (r.advanced) {
+    if (muted && !isSourceMuted(expr, src)) {
+      const term = clauseToTerm({ field: "source", op: "neq", value: src });
+      return expr.trim() ? `${expr.trim()} ${term}` : term;
+    }
+    return expr; // can't safely remove from an advanced expr
+  }
+  const next = r.clauses.filter((c) => !(c.field === "source" && c.op === "neq" && c.value === src));
+  if (muted) next.push({ field: "source", op: "neq", value: src });
+  return clausesToExpr(next);
+}
+
+export function setSourceSoloed(expr: string, src: string, soloed: boolean): string {
+  const r = parseClauses(expr);
+  if (r.advanced) {
+    if (soloed && !isSourceSoloed(expr, src)) {
+      const term = clauseToTerm({ field: "source", op: "eq", value: src });
+      return expr.trim() ? `${expr.trim()} ${term}` : term;
+    }
+    return expr;
+  }
+  // Drop any existing source-eq clauses first — solo is exclusive.
+  const next = r.clauses.filter((c) => !(c.field === "source" && c.op === "eq"));
+  if (soloed) next.push({ field: "source", op: "eq", value: src });
+  return clausesToExpr(next);
+}
+
 // withTimeRange returns `expr` with any existing `ts:[..]` / `ts:>=` /
 // `ts:>` / `ts:<=` / `ts:<` / `ts:N..M` / `-ts:...` clauses removed. If
 // `lo` and `hi` are both finite, a fresh `ts:[lo..hi]` clause is

@@ -20,7 +20,7 @@
   import SaveQuickModal from "./lib/SaveQuickModal.svelte";
   import SettingsModal from "./lib/SettingsModal.svelte";
   import { requestSaveQuick, QUICK_PROMPT, persistQuickChips, DEFAULT_CHIPS } from "./lib/quick-filters";
-  import { parseClauses, withTimeRange } from "./lib/filter-dsl";
+  import { parseClauses, withTimeRange, isSourceMuted, isSourceSoloed, setSourceMuted, setSourceSoloed } from "./lib/filter-dsl";
   import Timeline from "./lib/Timeline.svelte";
   import LogRow from "./lib/LogRow.svelte";
   import ColumnsMenu from "./lib/ColumnsMenu.svelte";
@@ -590,6 +590,15 @@
     if (r < 0.1) return "<0.1/s";
     if (r < 10) return r.toFixed(1) + "/s";
     return Math.round(r) + "/s";
+  }
+
+  function toggleMute(name: string) {
+    pendingFilter = setSourceMuted(pendingFilter, name, !isSourceMuted(pendingFilter, name));
+    applyFilter();
+  }
+  function toggleSolo(name: string) {
+    pendingFilter = setSourceSoloed(pendingFilter, name, !isSourceSoloed(pendingFilter, name));
+    applyFilter();
   }
   function onColumnsChange(next: Column[]) { columns = next; }
   function visibleColumns(cols: Column[]): Column[] { return cols.filter((c) => c.visible); }
@@ -1164,11 +1173,29 @@
       {/if}
       {#each sources as src}
         {@const health = sourceHealthDot(src)}
+        {@const muted = isSourceMuted(filter, src.name)}
+        {@const soloed = isSourceSoloed(filter, src.name)}
         <div class="mb-2 group" class:opacity-50={src.state === "closing"}>
           <div class="flex items-center justify-between gap-1">
             <span class={`shrink-0 w-1.5 h-1.5 rounded-full ${health.cls}`} title={health.title}></span>
             <div class="mono text-xs truncate flex-1" title={src.name}>{src.name}</div>
             <span class="text-[10px] text-zinc-500 mono shrink-0" title={`${src.line_count ?? 0} lines total`}>{fmtRate(src.rate_ewma)}</span>
+            <button
+              class={muted
+                ? "px-1 text-[10px] rounded bg-rose-600 text-white"
+                : "opacity-0 group-hover:opacity-100 px-1 text-[10px] rounded text-zinc-500 hover:bg-zinc-200 dark:hover:bg-zinc-800"}
+              title={muted ? "Unmute (currently hidden)" : "Mute — hide rows from this source"}
+              aria-label="mute source"
+              aria-pressed={muted}
+              onclick={() => toggleMute(src.name)}>M</button>
+            <button
+              class={soloed
+                ? "px-1 text-[10px] rounded bg-sky-600 text-white"
+                : "opacity-0 group-hover:opacity-100 px-1 text-[10px] rounded text-zinc-500 hover:bg-zinc-200 dark:hover:bg-zinc-800"}
+              title={soloed ? "Unsolo" : "Solo — show only this source"}
+              aria-label="solo source"
+              aria-pressed={soloed}
+              onclick={() => toggleSolo(src.name)}>S</button>
             <button
               class="opacity-0 group-hover:opacity-100 text-zinc-500 hover:text-red-500 disabled:hover:text-zinc-500 disabled:cursor-not-allowed"
               title={src.state === "closing" ? "Closing…" : "Remove"}
