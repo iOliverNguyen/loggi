@@ -273,3 +273,26 @@ export function defaultOpsForField(field: string): ClauseOp[] {
 }
 
 export { BUILTIN_FIELDS };
+
+// withTimeRange returns `expr` with any existing `ts:[..]` / `ts:>=` /
+// `ts:>` / `ts:<=` / `ts:<` / `ts:N..M` / `-ts:...` clauses removed. If
+// `lo` and `hi` are both finite, a fresh `ts:[lo..hi]` clause is
+// appended. lo/hi are unix seconds.
+//
+// This lets the timeline brush coexist with a typed filter — the brush
+// owns the ts term, everything else is preserved verbatim.
+export function withTimeRange(expr: string, lo: number | null, hi: number | null): string {
+  const tokens = tokenize(expr.trim());
+  const kept: string[] = [];
+  for (const t of tokens) {
+    let bare = t;
+    if (bare.startsWith("-")) bare = bare.slice(1);
+    if (bare.startsWith("@")) bare = bare.slice(1);
+    if (bare === "ts" || bare.startsWith("ts:")) continue;
+    kept.push(t);
+  }
+  if (lo != null && hi != null && Number.isFinite(lo) && Number.isFinite(hi) && lo < hi) {
+    kept.push(`ts:[${Math.floor(lo)}..${Math.ceil(hi)}]`);
+  }
+  return kept.join(" ");
+}

@@ -52,6 +52,7 @@ func (s *Server) serveHTTP(l net.Listener) {
 	mux.HandleFunc("/api/export", s.handleAPIExport)
 	mux.HandleFunc("/api/health", s.handleAPIHealth)
 	mux.HandleFunc("/api/columns", s.handleAPIColumns)
+	mux.HandleFunc("/api/histogram", s.handleAPIHistogram)
 	if s.opts.StaticFS != nil {
 		mux.Handle("/", s.opts.StaticFS)
 	} else {

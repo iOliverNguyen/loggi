@@ -20,7 +20,8 @@
   import SaveQuickModal from "./lib/SaveQuickModal.svelte";
   import SettingsModal from "./lib/SettingsModal.svelte";
   import { requestSaveQuick, QUICK_PROMPT, persistQuickChips, DEFAULT_CHIPS } from "./lib/quick-filters";
-  import { parseClauses } from "./lib/filter-dsl";
+  import { parseClauses, withTimeRange } from "./lib/filter-dsl";
+  import Timeline from "./lib/Timeline.svelte";
   import {
     readSessionFromHash,
     clearAddress,
@@ -523,6 +524,15 @@
   function isPathFiltered(p: string[]): boolean {
     return activeFilterFields.has(p.join("."));
   }
+
+  // Show the timeline strip (collapsible).
+  let showTimeline = $state((localStorage.getItem("loggi.showTimeline") ?? "1") !== "0");
+  $effect(() => { try { localStorage.setItem("loggi.showTimeline", showTimeline ? "1" : "0"); } catch {} });
+
+  function applyTimeRange(lo: number | null, hi: number | null) {
+    pendingFilter = withTimeRange(pendingFilter, lo, hi);
+    applyFilter();
+  }
   let filterInputEl: HTMLInputElement | null = $state(null);
   let showHelp = $state(false);
   let helpInitialTab = $state<"keys" | "syntax" | "examples" | undefined>(undefined);
@@ -1014,6 +1024,10 @@
       onApply={(expr) => quickLevel(expr)} />
   {/if}
 
+  {#if showTimeline}
+    <Timeline filter={filter} onApplyRange={applyTimeRange} live={!paused} />
+  {/if}
+
   <!-- status row: counts and notices -->
   <div class="px-4 py-1 border-b border-zinc-200 dark:border-zinc-800 flex items-center gap-2 text-[11px] text-zinc-500">
     <span>{entries.length} rows{paused ? " · paused" : ""}{!stickToBottom ? " · scrolled" : ""}</span>
@@ -1264,10 +1278,12 @@
     {density}
     {showQuickBar}
     {showTimestamps}
+    {showTimeline}
     onChangeTheme={(t) => (theme = t)}
     onChangeDensity={(d) => (density = d)}
     onChangeShowQuickBar={(v) => (showQuickBar = v)}
     onChangeShowTimestamps={(v) => (showTimestamps = v)}
+    onChangeShowTimeline={(v) => (showTimeline = v)}
     onClearHistory={() => {
       filterHistory = [];
       try { localStorage.removeItem("loggi.filterHistory"); } catch {}

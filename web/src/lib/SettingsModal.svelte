@@ -10,10 +10,12 @@
     density,
     showQuickBar,
     showTimestamps,
+    showTimeline,
     onChangeTheme,
     onChangeDensity,
     onChangeShowQuickBar,
     onChangeShowTimestamps,
+    onChangeShowTimeline,
     onClearHistory,
     onClearQuickChips,
     onClearLocal,
@@ -24,10 +26,12 @@
     density: Density;
     showQuickBar: boolean;
     showTimestamps: boolean;
+    showTimeline: boolean;
     onChangeTheme: (t: Theme) => void;
     onChangeDensity: (d: Density) => void;
     onChangeShowQuickBar: (v: boolean) => void;
     onChangeShowTimestamps: (v: boolean) => void;
+    onChangeShowTimeline: (v: boolean) => void;
     onClearHistory: () => void;
     onClearQuickChips: () => void;
     onClearLocal: () => void;
@@ -121,6 +125,10 @@
           <label class="flex items-center justify-between gap-3 cursor-pointer">
             <span class="text-xs">Show Quick filter bar</span>
             <input type="checkbox" checked={showQuickBar} onchange={(e) => onChangeShowQuickBar((e.currentTarget as HTMLInputElement).checked)} />
+          </label>
+          <label class="flex items-center justify-between gap-3 cursor-pointer">
+            <span class="text-xs">Show timeline strip</span>
+            <input type="checkbox" checked={showTimeline} onchange={(e) => onChangeShowTimeline((e.currentTarget as HTMLInputElement).checked)} />
           </label>
         </div>
       </section>
