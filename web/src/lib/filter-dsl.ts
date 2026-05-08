@@ -15,7 +15,9 @@ export type ClauseOp =
   | "gte"
   | "lt"
   | "lte"
-  | "range";
+  | "range"
+  | "exists"
+  | "nexists";
 
 export interface Clause {
   field: string; // dotted path: "level", "service", "user.id"
@@ -76,6 +78,9 @@ function renderValue(op: ClauseOp, v: string): string {
       const [lo, hi] = v.split("..");
       return `[${lo}..${hi}]`;
     }
+    case "exists":
+    case "nexists":
+      return "*";
   }
 }
 
@@ -86,7 +91,7 @@ export function clauseToTerm(c: Clause): string {
     return c.op === "ncontains" ? `-${inner}` : inner;
   }
   const term = `${fieldRef(c.field)}:${renderValue(c.op, c.value)}`;
-  if (c.op === "neq" || c.op === "ncontains") return `-${term}`;
+  if (c.op === "neq" || c.op === "ncontains" || c.op === "nexists") return `-${term}`;
   return term;
 }
 
@@ -217,6 +222,17 @@ function parseTerm(raw: string): Clause | null {
     return { field, op: opMap[cmp[1]!]!, value: cmp[2]!.trim() };
   }
 
+  // Existence predicate: `field:*` (or any all-stars value).
+  if (/^\*+$/.test(value)) {
+    return { field, op: negate ? "nexists" : "exists", value: "" };
+  }
+
+  // Quoted-string globs (e.g. `field:"*foo*"`) round-trip would lose the
+  // `\*` escape distinction — punt to advanced.
+  if (value.startsWith('"') && value.includes("*")) {
+    return null;
+  }
+
   // Substring: *x* or *x or x*
   if (value.includes("*")) {
     return {
@@ -241,17 +257,19 @@ export const OP_LABELS: Record<ClauseOp, string> = {
   lt: "<",
   lte: "≤",
   range: "in [a..b]",
+  exists: "is set",
+  nexists: "not set",
 };
 
 export function defaultOpsForField(field: string): ClauseOp[] {
   if (field === "level") {
     // level is ordinal-comparable in the server.
-    return ["eq", "neq", "gte", "gt", "lte", "lt"];
+    return ["eq", "neq", "gte", "gt", "lte", "lt", "exists", "nexists"];
   }
   if (field === "ts") {
-    return ["range", "gte", "gt", "lte", "lt"];
+    return ["range", "gte", "gt", "lte", "lt", "exists", "nexists"];
   }
-  return ["eq", "neq", "contains", "ncontains"];
+  return ["eq", "neq", "contains", "ncontains", "exists", "nexists"];
 }
 
 export { BUILTIN_FIELDS };

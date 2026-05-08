@@ -140,16 +140,123 @@ func TestEmptyMatchesAll(t *testing.T) {
 }
 
 func TestParseErrors(t *testing.T) {
-	bad := []string{"(level:error", "level:[1..", "level:>=",
-		// `field:*` (or `field:**`) trims to an empty needle, which would
-		// match every value as a SubstrNode — almost never the user's
-		// intent. Reject explicitly so the user gets feedback.
-		"service:*", "service:**"}
+	bad := []string{"(level:error", "level:[1..", "level:>="}
 	for _, b := range bad {
 		_, err := Parse(b)
 		if err == nil {
 			t.Errorf("want parse error for %q", b)
 		}
+	}
+}
+
+// `field:*` (and any all-stars variant) is the existence predicate:
+// the field must be set & non-empty.
+func TestExistsPredicate(t *testing.T) {
+	s := setup(t)
+	got, err := count(s, "service:*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 4 {
+		t.Fatalf("service:* want 4 got %d", got)
+	}
+	// Nested path: only one row has @msg_batch_conf set.
+	got, err = count(s, "@msg_batch_conf.ConsumerQos:*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 1 {
+		t.Fatalf("@msg_batch_conf.ConsumerQos:* want 1 got %d", got)
+	}
+	// Negation: rows where service is missing/empty.
+	got, err = count(s, "-service:*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 0 {
+		t.Fatalf("-service:* want 0 got %d", got)
+	}
+	// `**` collapses to existence too.
+	got, err = count(s, "service:**")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 4 {
+		t.Fatalf("service:** want 4 got %d", got)
+	}
+}
+
+// Globbed quoted strings (item 4): `*` inside quotes is a wildcard;
+// `\*` escapes to a literal asterisk.
+func TestQuotedGlob(t *testing.T) {
+	s := setup(t)
+	got, err := count(s, `msg:"*timeout*"`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 1 {
+		t.Fatalf(`msg:"*timeout*" want 1 got %d`, got)
+	}
+	// Anchored glob: prefix match.
+	got, err = count(s, `msg:"dispatcher*"`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 1 {
+		t.Fatalf(`msg:"dispatcher*" want 1 got %d`, got)
+	}
+	// `\*` is a literal asterisk; no row has one in setup data.
+	got, err = count(s, `msg:"\*"`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 0 {
+		t.Fatalf(`msg:"\*" want 0 got %d`, got)
+	}
+	// Multi-wild glob.
+	got, err = count(s, `msg:"*kafka*retry*"`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 1 {
+		t.Fatalf(`msg:"*kafka*retry*" want 1 got %d`, got)
+	}
+}
+
+// Bare `[ticket]` and `-->` style tokens (item 7): these tokenize as
+// glob runs and become msg substrings.
+func TestBareSpecialTokens(t *testing.T) {
+	s := store.New(store.Options{Cap: 16})
+	rows := []map[string]any{
+		{"level": "info", "msg": "[TICKET-42] processing"},
+		{"level": "info", "msg": "request --> response"},
+		{"level": "info", "msg": "plain message"},
+	}
+	for _, r := range rows {
+		raw, _ := json.Marshal(r)
+		s.Publish(store.AppendInput{JSON: raw})
+	}
+	got, err := count(s, "[TICKET-42]")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 1 {
+		t.Fatalf("[TICKET-42] want 1 got %d", got)
+	}
+	got, err = count(s, "-->")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 1 {
+		t.Fatalf("--> want 1 got %d", got)
+	}
+	// Negation should still work — `-foo` is NOT(foo).
+	got, err = count(s, "-plain")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 2 {
+		t.Fatalf("-plain want 2 got %d", got)
 	}
 }
 

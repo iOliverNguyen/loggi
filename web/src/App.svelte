@@ -17,6 +17,7 @@
   import RowContextMenu from "./lib/RowContextMenu.svelte";
   import Combobox from "./lib/Combobox.svelte";
   import FilterAutocomplete from "./lib/FilterAutocomplete.svelte";
+  import { saveCurrentAsQuick } from "./lib/quick-filters";
   import {
     readSessionFromHash,
     clearAddress,
@@ -231,7 +232,10 @@
       const incoming = (m.batch.entries ?? []).map(decodeEntry);
       // Track field names discovered from each row's nested JSON for the
       // filter builder's column dropdown.
-      for (const e of incoming) collectFieldPaths(e.fields);
+      for (const e of incoming) {
+        collectFieldPaths(e.fields);
+        collectBuiltinValues(e);
+      }
 
       const seen = new Set(entries.map((e) => e.seq));
       const fresh = incoming.filter((e) => !seen.has(e.seq));
@@ -272,17 +276,57 @@
   // discoveredFields accumulates dotted paths seen in entry.fields so the
   // filter builder can offer them as columns. Bounded to keep memory tight.
   let discoveredFields = $state(new Set<string>());
+  // fieldValues tracks distinct values seen per top-level field, keyed
+  // by frequency, so the filter autocomplete can offer real values.
+  // Capped at 50 values per field; eviction by lowest count.
+  let fieldValues = $state(new Map<string, Map<string, number>>());
+  const VALUES_PER_FIELD = 50;
+
+  function bumpFieldValue(field: string, value: string) {
+    if (!value) return;
+    if (value.length > 200) return; // skip absurd payloads
+    let m = fieldValues.get(field);
+    if (!m) {
+      m = new Map();
+      fieldValues.set(field, m);
+    }
+    m.set(value, (m.get(value) ?? 0) + 1);
+    if (m.size > VALUES_PER_FIELD) {
+      // Evict the least-frequent entry.
+      let minKey = "";
+      let minCount = Infinity;
+      for (const [k, c] of m) {
+        if (c < minCount) {
+          minCount = c;
+          minKey = k;
+        }
+      }
+      if (minKey) m.delete(minKey);
+    }
+  }
+
   function collectFieldPaths(obj: unknown, prefix = "") {
     if (!obj || typeof obj !== "object" || Array.isArray(obj)) return;
     if (discoveredFields.size > 256) return;
     for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
       const path = prefix ? `${prefix}.${k}` : k;
       discoveredFields.add(path);
-      if (v && typeof v === "object" && !Array.isArray(v)) {
+      // Record string/number values for the top-level path so
+      // autocomplete can suggest them.
+      if (typeof v === "string" || typeof v === "number") {
+        bumpFieldValue(path, String(v));
+      } else if (v && typeof v === "object" && !Array.isArray(v)) {
         collectFieldPaths(v, path);
       }
     }
     discoveredFields = discoveredFields; // notify Svelte
+    fieldValues = fieldValues;
+  }
+
+  function collectBuiltinValues(e: Entry) {
+    if (e.service) bumpFieldValue("service", e.service);
+    if (e.level) bumpFieldValue("level", e.level);
+    fieldValues = fieldValues;
   }
 
   function requestHistory() {
@@ -295,9 +339,40 @@
     });
   }
 
+  // Recent filter expressions (MRU first, deduped, capped). Surfaced by
+  // FilterAutocomplete on empty focus and as a substring search while
+  // typing.
+  const FILTER_HISTORY_KEY = "loggi.filterHistory";
+  const FILTER_HISTORY_MAX = 20;
+  let filterHistory = $state<string[]>(loadFilterHistory());
+
+  function loadFilterHistory(): string[] {
+    try {
+      const raw = localStorage.getItem(FILTER_HISTORY_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.every((x: any) => typeof x === "string")) {
+          return parsed.slice(0, FILTER_HISTORY_MAX);
+        }
+      }
+    } catch {}
+    return [];
+  }
+
+  function pushFilterHistory(expr: string) {
+    const trimmed = expr.trim();
+    if (!trimmed) return;
+    const next = [trimmed, ...filterHistory.filter((x) => x !== trimmed)].slice(0, FILTER_HISTORY_MAX);
+    filterHistory = next;
+    try {
+      localStorage.setItem(FILTER_HISTORY_KEY, JSON.stringify(next));
+    } catch {}
+  }
+
   function applyFilter() {
     filter = pendingFilter;
     localStorage.setItem("loggi.filter", filter);
+    pushFilterHistory(filter);
     bus?.send({ type: "filter", filter: { sub_id: SUB_ID, filter } });
     entries = [];
     dropped = 0;
@@ -437,6 +512,7 @@
   }
   let filterInputEl: HTMLInputElement | null = $state(null);
   let showHelp = $state(false);
+  let helpInitialTab = $state<"keys" | "syntax" | "examples" | undefined>(undefined);
   let showExportMenu = $state(false);
   let showProfilesModal = $state(false);
   const iconBtnCls = "p-1.5 rounded bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300";
@@ -723,7 +799,7 @@
 <div class="flex flex-col h-screen">
   <!-- top bar -->
   <header
-    class="border-b border-zinc-200 dark:border-zinc-800 px-4 py-2 flex items-center gap-2 bg-white/70 dark:bg-zinc-900/70 backdrop-blur">
+    class="z-20 border-b border-zinc-200 dark:border-zinc-800 px-4 py-2 flex items-center gap-2 bg-white/70 dark:bg-zinc-900/70 backdrop-blur">
     <strong class="mono">loggi</strong>
     <span
       class="relative inline-flex w-2.5 h-2.5"
@@ -770,6 +846,8 @@
         inputEl={filterInputEl}
         value={pendingFilter}
         {discoveredFields}
+        {fieldValues}
+        recentFilters={filterHistory}
         onChange={(v) => (pendingFilter = v)} />
     </div>
 
@@ -922,7 +1000,11 @@
           pendingFilter = expr;
           applyFilter();
         }}
-        onShowHelp={() => (showHelp = true)} />
+        onShowHelp={() => {
+          helpInitialTab = "syntax";
+          showHelp = true;
+        }}
+        onSaveQuick={() => saveCurrentAsQuick(pendingFilter)} />
       <div class="border-t border-zinc-200 dark:border-zinc-800 my-3"></div>
 
       <div class="flex items-center justify-between mb-2">
@@ -1120,7 +1202,12 @@
 {/if}
 
 {#if showHelp}
-  <HelpModal onClose={() => (showHelp = false)} />
+  <HelpModal
+    initialTab={helpInitialTab}
+    onClose={() => {
+      showHelp = false;
+      helpInitialTab = undefined;
+    }} />
 {/if}
 
 {#if showProfilesModal}

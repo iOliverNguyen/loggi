@@ -36,3 +36,46 @@ body {
 .ansi-96 { color: #22d3ee; }
 .ansi-97 { color: #fafafa; }
 .ansi-1 { font-weight: 600; }
+
+/*
+ * Scrollbars: minimal, dark/light aware. Always thin; thumb is faintly
+ * visible at rest and brightens on hover of the scroller. Firefox uses
+ * the modern scrollbar-* shorthand; WebKit uses the shadow pseudo-tree.
+ */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 0, 0, 0.18) transparent;
+}
+.dark * {
+  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.18);
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  transition: background 0.2s;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.32);
+  background-clip: padding-box;
+}
+.dark ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+  background-clip: padding-box;
+}
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.32);
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}

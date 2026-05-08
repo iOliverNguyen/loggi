@@ -71,6 +71,10 @@ type token struct {
 	text string
 	num  float64
 	pos  int
+	// parts is populated only for tString tokens whose source contained
+	// at least one *unescaped* '*'. When set, the value is a glob
+	// pattern (alternating literal/wild segments).
+	parts []GlobPart
 }
 
 type parser struct {
@@ -112,8 +116,16 @@ func (p *parser) tokenize() {
 			i++
 			continue
 		case '[':
-			p.toks = append(p.toks, token{kind: tLBracket, text: "[", pos: i})
-			i++
+			// `[NUM..NUM]` after a colon is a range. Otherwise the run is
+			// a bare glob (e.g. `[ticket]` matches msg substring).
+			if i+1 < len(s) && (isDigit(s[i+1]) || s[i+1] == '-') {
+				p.toks = append(p.toks, token{kind: tLBracket, text: "[", pos: i})
+				i++
+				continue
+			}
+			j := consumeGlobRun(s, i)
+			p.toks = append(p.toks, token{kind: tStar, text: s[i:j], pos: i})
+			i = j
 			continue
 		case ']':
 			p.toks = append(p.toks, token{kind: tRBracket, text: "]", pos: i})
@@ -129,27 +141,49 @@ func (p *parser) tokenize() {
 			i++
 			continue
 		case '>', '<':
-			op := string(c)
-			i++
-			if i < len(s) && s[i] == '=' {
-				op += "="
+			// tCmp only when in a value position (after `:`) AND followed
+			// by `=` / digit / ident. Otherwise it's a bare glob run
+			// (e.g. `-->`).
+			if p.expectingValue() && i+1 < len(s) && (s[i+1] == '=' || isDigit(s[i+1]) || isIdentStart(s[i+1])) {
+				op := string(c)
 				i++
+				if i < len(s) && s[i] == '=' {
+					op += "="
+					i++
+				}
+				p.toks = append(p.toks, token{kind: tCmp, text: op, pos: i - len(op)})
+				continue
 			}
-			p.toks = append(p.toks, token{kind: tCmp, text: op, pos: i - len(op)})
+			j := consumeGlobRun(s, i)
+			p.toks = append(p.toks, token{kind: tStar, text: s[i:j], pos: i})
+			i = j
 			continue
 		case '-':
-			// Could be unary minus on a number, or NOT prefix. We look at
-			// surroundings: if the prev token suggests a value position and
-			// the next is a digit, treat as part of number; otherwise it's
-			// a NOT prefix.
-			isNeg := i+1 < len(s) && (s[i+1] >= '0' && s[i+1] <= '9')
-			if isNeg && p.expectingValue() {
-				j := i + 1
-				for j < len(s) && (isDigit(s[j]) || s[j] == '.') {
-					j++
+			// `-` has three possible meanings:
+			//   1. Unary minus on a number, when in value position.
+			//   2. NOT prefix, when followed by an opener (ident / `(` /
+			//      `@` / `"` / digit-not-in-value-pos / `NOT`).
+			//   3. Otherwise, part of a bare glob run (e.g. `-->`).
+			if i+1 < len(s) {
+				c2 := s[i+1]
+				if isDigit(c2) && p.expectingValue() {
+					j := i + 1
+					for j < len(s) && (isDigit(s[j]) || s[j] == '.') {
+						j++
+					}
+					num, _ := strconv.ParseFloat(s[i:j], 64)
+					p.toks = append(p.toks, token{kind: tNumber, text: s[i:j], num: num, pos: i})
+					i = j
+					continue
 				}
-				num, _ := strconv.ParseFloat(s[i:j], 64)
-				p.toks = append(p.toks, token{kind: tNumber, text: s[i:j], num: num, pos: i})
+				if isIdentStart(c2) || c2 == '(' || c2 == '@' || c2 == '"' {
+					p.toks = append(p.toks, token{kind: tDash, text: "-", pos: i})
+					i++
+					continue
+				}
+				// Glob run: '-' followed by something non-ident/non-opener.
+				j := consumeGlobRun(s, i)
+				p.toks = append(p.toks, token{kind: tStar, text: s[i:j], pos: i})
 				i = j
 				continue
 			}
@@ -158,20 +192,44 @@ func (p *parser) tokenize() {
 			continue
 		case '"':
 			j := i + 1
-			var b strings.Builder
+			var b strings.Builder   // unescaped text (for EqNode etc.)
+			var lit strings.Builder // current literal segment for parts
+			var parts []GlobPart
+			sawWild := false
+			flushLit := func() {
+				if lit.Len() > 0 {
+					parts = append(parts, GlobPart{Lit: lit.String()})
+					lit.Reset()
+				}
+			}
 			for j < len(s) && s[j] != '"' {
 				if s[j] == '\\' && j+1 < len(s) {
 					b.WriteByte(s[j+1])
+					lit.WriteByte(s[j+1])
 					j += 2
 					continue
 				}
+				if s[j] == '*' {
+					b.WriteByte('*')
+					sawWild = true
+					flushLit()
+					parts = append(parts, GlobPart{Wild: true})
+					j++
+					continue
+				}
 				b.WriteByte(s[j])
+				lit.WriteByte(s[j])
 				j++
 			}
 			if j < len(s) {
 				j++ // consume closing "
 			}
-			p.toks = append(p.toks, token{kind: tString, text: b.String(), pos: i})
+			tok := token{kind: tString, text: b.String(), pos: i}
+			if sawWild {
+				flushLit()
+				tok.parts = parts
+			}
+			p.toks = append(p.toks, tok)
 			i = j
 			continue
 		}
@@ -258,18 +316,45 @@ func isOpener(k tokKind) bool {
 }
 
 func (p *parser) expectingValue() bool {
-	if len(p.toks) == 0 {
+	// Walk back, skipping synthetic-AND (whitespace) tokens since the
+	// caller hasn't filtered them yet.
+	for i := len(p.toks) - 1; i >= 0; i-- {
+		t := p.toks[i]
+		if t.kind == tAnd && t.text == " " {
+			continue
+		}
+		switch t.kind {
+		case tColon, tLBracket, tDotDot, tCmp:
+			return true
+		}
 		return false
-	}
-	switch p.toks[len(p.toks)-1].kind {
-	case tColon, tLBracket, tDotDot, tCmp:
-		return true
 	}
 	return false
 }
 
 func isSpace(c byte) bool { return c == ' ' || c == '\t' }
 func isDigit(c byte) bool { return c >= '0' && c <= '9' }
+func isIdentStart(c byte) bool {
+	return c == '_' ||
+		(c >= 'a' && c <= 'z') ||
+		(c >= 'A' && c <= 'Z')
+}
+
+// consumeGlobRun returns the index past a bare glob token starting at i.
+// Stops at whitespace, parens, or quote — which keeps boolean grouping
+// and quoted strings as separate tokens. Used for `[ticket]`, `-->`,
+// `>=>>`, and similar punctuation-ish runs the user might type bare.
+func consumeGlobRun(s string, i int) int {
+	j := i + 1
+	for j < len(s) {
+		c := s[j]
+		if isSpace(c) || c == '(' || c == ')' || c == '"' {
+			break
+		}
+		j++
+	}
+	return j
+}
 func isDelim(c byte) bool {
 	switch c {
 	case '(', ')', ':', '@', '[', ']', '"', '.', '>', '<':
@@ -417,6 +502,9 @@ func (p *parser) parseTerm() (Node, error) {
 	}
 	if t.kind == tString {
 		p.advance()
+		if t.parts != nil {
+			return &SubstrNode{Path: []string{"msg"}, Glob: t.parts}, nil
+		}
 		return &SubstrNode{Path: []string{"msg"}, Needle: t.text, Exact: true}, nil
 	}
 	if t.kind == tStar {
@@ -510,16 +598,21 @@ func (p *parser) parseFieldValue(path []string) (Node, error) {
 		return nil, fmt.Errorf("filter: bad value after %s", t.text)
 	case tString, tIdent, tStar, tNumber:
 		p.advance()
+		// Quoted strings can carry a glob pattern (item 4): `key:"*foo*"`
+		// → glob substring with `\*` literal-escape support.
+		if t.kind == tString && t.parts != nil {
+			return &SubstrNode{Path: path, Glob: t.parts}, nil
+		}
 		// Glob-style "contains" on any field: foo:*bar*, foo:bar*, foo:*bar.
 		// The tokenizer emits any non-ident-shaped value as tStar, so the
 		// presence of '*' in the literal text is the cue that the user
-		// wanted a substring match rather than exact equality. A token that
-		// is *only* '*' chars trims to "" and would match every string,
-		// which is almost never what the user meant — reject it explicitly.
+		// wanted a substring match rather than exact equality. A token of
+		// only '*' chars (`field:*`, `field:**`) is the existence
+		// predicate (item 3): match when the field is set & non-empty.
 		if t.kind == tStar && strings.Contains(t.text, "*") {
 			needle := strings.Trim(t.text, "*")
 			if needle == "" {
-				return nil, fmt.Errorf("filter: empty substring pattern %q", t.text)
+				return &ExistsNode{Path: path}, nil
 			}
 			return &SubstrNode{Path: path, Needle: needle}, nil
 		}

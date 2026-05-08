@@ -38,6 +38,8 @@ func compile(n Node, s *store.Store) store.EvalFn {
 		return compileEq(x, s)
 	case *SubstrNode:
 		return compileSubstr(x, s)
+	case *ExistsNode:
+		return compileExists(x, s)
 	case *RangeNode:
 		return compileRange(x, s)
 	case *CmpNumNode:
@@ -66,6 +68,12 @@ func compileEq(n *EqNode, s *store.Store) store.EvalFn {
 }
 
 func compileSubstr(n *SubstrNode, s *store.Store) store.EvalFn {
+	if n.Glob != nil {
+		parts := n.Glob
+		return func(seq uint64) bool {
+			return matchGlob(materializeField(s, seq, n.Path), parts)
+		}
+	}
 	needle := n.Needle
 	if needle == "" {
 		return func(uint64) bool { return true }
@@ -78,6 +86,65 @@ func compileSubstr(n *SubstrNode, s *store.Store) store.EvalFn {
 		}
 		return strings.Contains(v, needle)
 	}
+}
+
+func compileExists(n *ExistsNode, s *store.Store) store.EvalFn {
+	return func(seq uint64) bool {
+		return materializeField(s, seq, n.Path) != ""
+	}
+}
+
+// matchGlob walks an alternating literal/wild parts list against s.
+// The pattern is anchored at both ends; wild parts greedily consume
+// any-substring (including empty).
+func matchGlob(s string, parts []GlobPart) bool {
+	if len(parts) == 0 {
+		return s == ""
+	}
+	// First literal must match at the start unless preceded by a wild.
+	idx := 0
+	i := 0
+	if !parts[0].Wild {
+		if !strings.HasPrefix(s, parts[0].Lit) {
+			return false
+		}
+		i = len(parts[0].Lit)
+		idx = 1
+	}
+	for idx < len(parts) {
+		p := parts[idx]
+		idx++
+		if p.Wild {
+			if idx >= len(parts) {
+				// Trailing wild → match rest.
+				return true
+			}
+			next := parts[idx]
+			idx++
+			if next.Wild {
+				// Two consecutive wilds collapse — shouldn't happen but
+				// be defensive.
+				continue
+			}
+			pos := strings.Index(s[i:], next.Lit)
+			if pos < 0 {
+				return false
+			}
+			i += pos + len(next.Lit)
+			continue
+		}
+		// Adjacent literal (only happens at start, handled above).
+		if !strings.HasPrefix(s[i:], p.Lit) {
+			return false
+		}
+		i += len(p.Lit)
+	}
+	// If the pattern didn't end with a wild, the entire input must
+	// have been consumed.
+	if !parts[len(parts)-1].Wild {
+		return i == len(s)
+	}
+	return true
 }
 
 func compileRange(n *RangeNode, s *store.Store) store.EvalFn {

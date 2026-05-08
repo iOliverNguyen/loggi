@@ -13,15 +13,21 @@
 
   import { tick } from "svelte";
 
+  type Suggestion = { text: string; kind: "field" | "value" | "history" };
+
   let {
     inputEl,
     value,
     discoveredFields,
+    fieldValues,
+    recentFilters,
     onChange,
   } = $props<{
     inputEl: HTMLInputElement | null;
     value: string;
     discoveredFields: Set<string>;
+    fieldValues?: Map<string, Map<string, number>>;
+    recentFilters?: string[];
     onChange: (v: string) => void;
   }>();
 
@@ -52,46 +58,102 @@
     return { word: s.slice(start, end), start, end };
   }
 
-  let suggestions = $derived.by((): string[] => {
+  function topValuesForField(field: string, prefix: string, limit: number): string[] {
+    const base = field.startsWith("@") ? field.slice(1) : field;
+    const m = fieldValues?.get(base);
+    if (!m) return [];
+    const lower = prefix.toLowerCase();
+    const matches = [...m.entries()]
+      .filter(([v]) => v.toLowerCase().startsWith(lower))
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .slice(0, limit)
+      .map(([v]) => v);
+    return matches;
+  }
+
+  function quoteIfNeeded(v: string): string {
+    if (/[\s:()[\]"\\]/.test(v)) {
+      return `"${v.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+    }
+    return v;
+  }
+
+  let suggestions = $derived.by((): Suggestion[] => {
     if (!inputEl) return [];
     const caret = inputEl.selectionStart ?? value.length;
     const { word } = wordAt(value, caret);
-    if (!word) {
-      // Empty word at caret — show top-level field names.
-      return BUILTINS.slice(0, 8);
+    const trimmedAll = value.trim();
+
+    // Whole-input is empty + focused → show recent filters as the
+    // primary suggestion list.
+    if (!trimmedAll && (recentFilters?.length ?? 0) > 0) {
+      return recentFilters!.slice(0, 12).map((t) => ({ text: t, kind: "history" as const }));
     }
-    const lower = word.toLowerCase();
+
+    // While typing, also surface history entries that contain the
+    // current input as a substring (case-insensitive). These appear
+    // *after* field/value suggestions.
+    const historyHits: Suggestion[] = (recentFilters ?? [])
+      .filter((h) => h !== trimmedAll && h.toLowerCase().includes(trimmedAll.toLowerCase()))
+      .slice(0, 5)
+      .map((t) => ({ text: t, kind: "history" as const }));
+
+    if (!word) {
+      // Empty word at caret with non-empty input — show top-level field
+      // names plus history hits.
+      return [
+        ...BUILTINS.slice(0, 8).map((t) => ({ text: t, kind: "field" as const })),
+        ...historyHits,
+      ];
+    }
     const colon = word.indexOf(":");
     if (colon === -1) {
       // Field prefix — suggest built-ins + discovered fields prefixed with @.
       const stripped = word.startsWith("-") ? word.slice(1) : word;
       const prefix = word.startsWith("-") ? "-" : "";
       const stripped2 = stripped.startsWith("@") ? stripped.slice(1) : stripped;
-      const out = [
-        ...BUILTINS.filter((f) => f.startsWith(stripped2.toLowerCase())).map((f) => prefix + f),
+      const fieldSuggs: Suggestion[] = [
+        ...BUILTINS.filter((f) => f.startsWith(stripped2.toLowerCase())).map((f) => ({ text: prefix + f, kind: "field" as const })),
         ...[...discoveredFields]
           .filter((f) => f.toLowerCase().includes(stripped2.toLowerCase()))
           .slice(0, 10)
-          .map((f) => prefix + "@" + f),
+          .map((f) => ({ text: prefix + "@" + f, kind: "field" as const })),
       ];
-      return out.slice(0, 12);
+      return [...fieldSuggs.slice(0, 12), ...historyHits];
     }
     // After `field:` — suggest values per field.
-    const field = word.slice(0, colon);
+    const negPrefix = word.startsWith("-") ? "-" : "";
+    const fieldRaw = word.slice(negPrefix.length, colon);
     const valPrefix = word.slice(colon + 1);
-    if (field === "level") {
+    const valueSuggs: Suggestion[] = [];
+    if (fieldRaw === "level" || fieldRaw === "-level") {
       // Allow `level:` and `level:>=` style — show operator+value combos.
       if (valPrefix.startsWith(">=") || valPrefix.startsWith("<=") || valPrefix.startsWith(">") || valPrefix.startsWith("<")) {
         const op = valPrefix.match(/^(>=|<=|>|<)/)![0];
         const v = valPrefix.slice(op.length);
-        return LEVEL_VALUES.filter((l) => l.startsWith(v)).map((l) => `level:${op}${l}`);
+        for (const l of LEVEL_VALUES.filter((l) => l.startsWith(v))) {
+          valueSuggs.push({ text: `${negPrefix}level:${op}${l}`, kind: "value" });
+        }
+      } else {
+        for (const l of LEVEL_VALUES.filter((l) => l.startsWith(valPrefix))) {
+          valueSuggs.push({ text: `${negPrefix}level:${l}`, kind: "value" });
+        }
+        for (const o of OPERATORS.filter((o) => o.startsWith(valPrefix)).slice(0, 4)) {
+          valueSuggs.push({ text: `${negPrefix}level:${o}`, kind: "value" });
+        }
       }
-      return [
-        ...LEVEL_VALUES.filter((l) => l.startsWith(valPrefix)).map((l) => `level:${l}`),
-        ...OPERATORS.filter((o) => o.startsWith(valPrefix)).slice(0, 4).map((o) => `level:${o}`),
-      ];
+    } else {
+      // Other fields — pull observed values from fieldValues.
+      const top = topValuesForField(fieldRaw, valPrefix, 10);
+      for (const v of top) {
+        valueSuggs.push({ text: `${negPrefix}${fieldRaw}:${quoteIfNeeded(v)}`, kind: "value" });
+      }
+      // Always offer the existence predicate.
+      if (valPrefix === "" || "*".startsWith(valPrefix)) {
+        valueSuggs.push({ text: `${negPrefix}${fieldRaw}:*`, kind: "value" });
+      }
     }
-    return [];
+    return [...valueSuggs, ...historyHits];
   });
 
   $effect(() => {
@@ -123,14 +185,25 @@
     }
   }
 
-  function accept(suggestion: string) {
+  function accept(s: Suggestion) {
     if (!inputEl) return;
+    if (s.kind === "history") {
+      // Replace the entire input — history entries are full filter
+      // expressions, not caret-word completions.
+      onChange(s.text);
+      tick().then(() => {
+        inputEl?.focus();
+        const end = s.text.length;
+        inputEl?.setSelectionRange(end, end);
+      });
+      return;
+    }
     const caret = inputEl.selectionStart ?? value.length;
     const { start, end } = wordAt(value, caret);
-    const next = value.slice(0, start) + suggestion + value.slice(end);
+    const next = value.slice(0, start) + s.text + value.slice(end);
     onChange(next);
     tick().then(() => {
-      const newCaret = start + suggestion.length;
+      const newCaret = start + s.text.length;
       inputEl?.focus();
       inputEl?.setSelectionRange(newCaret, newCaret);
     });
@@ -180,11 +253,18 @@
       <button
         type="button"
         data-idx={i}
-        class="w-full text-left px-2.5 py-1 mono"
+        class="w-full text-left px-2.5 py-1 mono flex items-center justify-between gap-2"
         class:bg-sky-100={i === highlight}
         class:dark:bg-sky-900={i === highlight}
         onmousedown={(e) => { e.preventDefault(); accept(s); }}
-        onmouseenter={() => (highlight = i)}>{s}</button>
+        onmouseenter={() => (highlight = i)}>
+        <span class="truncate">{s.text}</span>
+        {#if s.kind === "history"}
+          <span class="text-[9px] text-zinc-400 shrink-0">recent</span>
+        {:else if s.kind === "value"}
+          <span class="text-[9px] text-zinc-400 shrink-0">value</span>
+        {/if}
+      </button>
     {/each}
   </div>
 {/if}

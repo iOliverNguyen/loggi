@@ -2,20 +2,20 @@
   import { tick } from "svelte";
   import Icon from "./Icon.svelte";
 
-  let { onClose } = $props<{ onClose: () => void }>();
+  type Tab = "keys" | "syntax" | "examples";
+  let { onClose, initialTab } = $props<{ onClose: () => void; initialTab?: Tab }>();
   let dialogEl: HTMLDivElement | null = $state(null);
   // Focus the dialog on mount so keystrokes (←/→ / 1/2/3 / Esc) reach our
   // onkeydown handler instead of being swallowed by the document body.
   $effect(() => {
     if (dialogEl) tick().then(() => dialogEl?.focus());
   });
-  type Tab = "keys" | "syntax" | "examples";
   const TABS: { id: Tab; label: string }[] = [
     { id: "keys", label: "Shortcuts" },
     { id: "syntax", label: "Filter syntax" },
     { id: "examples", label: "Examples" },
   ];
-  let tab = $state<Tab>("keys");
+  let tab = $state<Tab>(initialTab ?? "keys");
 
   // Modal-level keyboard nav: ←/→ or [ / ] to switch tabs; 1/2/3 jumps
   // directly. Tab is left to the browser for focus traversal between
@@ -67,6 +67,8 @@
         { e: "level:error", d: "exact match on a built-in field" },
         { e: '"connection refused"', d: "quoted string, exact match in msg" },
         { e: "@user.id:42", d: "nested JSON path (use @ for dotted paths)" },
+        { e: "[ticket]", d: "bare bracketed text → msg substring" },
+        { e: "-->", d: "bare punctuation → msg substring" },
       ],
     },
     {
@@ -74,8 +76,11 @@
       rows: [
         { e: "msg:*timeout*", d: "substring match on msg" },
         { e: "service:auth*", d: "prefix match" },
+        { e: "service:*", d: "field is set (non-empty)" },
         { e: "-level:debug", d: "negation (does not match)" },
         { e: "-*health*", d: "negated substring on msg" },
+        { e: 'msg:"*timeout*"', d: "glob inside a quoted string (preserves spaces)" },
+        { e: 'msg:"\\*"', d: "literal asterisk via \\*" },
       ],
     },
     {

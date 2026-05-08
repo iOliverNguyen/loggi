@@ -15,11 +15,13 @@
     discoveredFields,
     onApply,
     onShowHelp,
+    onSaveQuick,
   } = $props<{
     expression: string;
     discoveredFields: Set<string>;
     onApply: (expr: string) => void;
     onShowHelp?: () => void;
+    onSaveQuick?: () => void;
   }>();
 
   // Built-in fields the server treats specially or always exposes.
@@ -75,6 +77,8 @@
       neq: "eq",
       contains: "ncontains",
       ncontains: "contains",
+      exists: "nexists",
+      nexists: "exists",
     };
     const nextOp = flips[c.op];
     if (!nextOp) return;
@@ -85,8 +89,9 @@
 
   function addClause() {
     const v = newValue.trim();
-    if (newOp !== "range" && v === "") return;
-    let value = v;
+    const valueless = newOp === "exists" || newOp === "nexists";
+    if (!valueless && newOp !== "range" && v === "") return;
+    let value = valueless ? "" : v;
     if (newOp === "range") {
       const hi = newRangeHi.trim();
       if (!v || !hi) return;
@@ -110,6 +115,15 @@
   <div class="flex items-center justify-between mb-2">
     <h2 class="font-semibold">Filters</h2>
     <div class="flex items-center gap-1">
+      {#if onSaveQuick}
+        <button
+          class="p-1 rounded text-zinc-500 hover:text-sky-600 dark:hover:text-sky-400 hover:bg-zinc-200 dark:hover:bg-zinc-800"
+          title="Save current filter as a quick chip"
+          aria-label="save quick filter"
+          onclick={onSaveQuick}>
+          <Icon name="save" size={12} />
+        </button>
+      {/if}
       {#if onShowHelp}
         <button
           class="p-1 rounded text-zinc-500 hover:text-sky-600 dark:hover:text-sky-400 hover:bg-zinc-200 dark:hover:bg-zinc-800"
@@ -140,7 +154,7 @@
       {#each parsed.clauses as c, i}
         <span
           class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-zinc-200 dark:bg-zinc-800 mono text-[11px]">
-          {#if c.op === "neq" || c.op === "ncontains"}
+          {#if c.op === "neq" || c.op === "ncontains" || c.op === "nexists"}
             <span class="text-red-500" title="negated">!</span>
           {/if}
           <button
@@ -148,7 +162,9 @@
             title="toggle negate"
             onclick={() => toggleNegate(i)}>{c.field}</button>
           <span class="text-zinc-500">{OP_LABELS[c.op]}</span>
-          <span title={c.value} class="truncate max-w-[120px]">{c.value}</span>
+          {#if c.op !== "exists" && c.op !== "nexists"}
+            <span title={c.value} class="truncate max-w-[120px]">{c.value}</span>
+          {/if}
           <button
             class="text-zinc-500 hover:text-red-500 ml-0.5"
             title="remove"
@@ -176,11 +192,13 @@
             <option value={op}>{OP_LABELS[op]}</option>
           {/each}
         </select>
-        <input
-          class="flex-1 px-1.5 py-1 rounded bg-white dark:bg-zinc-800 mono text-[11px]"
-          placeholder={newOp === "range" ? "lo" : "value"}
-          bind:value={newValue}
-          onkeydown={(e) => e.key === "Enter" && addClause()} />
+        {#if newOp !== "exists" && newOp !== "nexists"}
+          <input
+            class="flex-1 px-1.5 py-1 rounded bg-white dark:bg-zinc-800 mono text-[11px]"
+            placeholder={newOp === "range" ? "lo" : "value"}
+            bind:value={newValue}
+            onkeydown={(e) => e.key === "Enter" && addClause()} />
+        {/if}
         {#if newOp === "range"}
           <input
             class="w-16 px-1.5 py-1 rounded bg-white dark:bg-zinc-800 mono text-[11px]"

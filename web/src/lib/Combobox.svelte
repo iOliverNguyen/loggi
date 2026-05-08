@@ -44,6 +44,21 @@
   let triggerEl: HTMLButtonElement | null = $state(null);
   let panelEl: HTMLDivElement | null = $state(null);
   let inputEl: HTMLInputElement | null = $state(null);
+  // Fixed-positioned coords from the trigger's bounding rect, so the
+  // panel escapes any ancestor overflow:hidden / stacking context.
+  let panelPos = $state({ left: 0, top: 0, width: 0 });
+
+  function place() {
+    if (!triggerEl) return;
+    const r = triggerEl.getBoundingClientRect();
+    const minW = 220;
+    const w = Math.max(r.width, minW);
+    let left = r.left;
+    if (align === "right") {
+      left = r.right - w;
+    }
+    panelPos = { left, top: r.bottom + 4, width: w };
+  }
 
   let selected = $derived(items.find((i: ComboItem) => i.value === value) ?? null);
 
@@ -63,6 +78,7 @@
   });
 
   async function show() {
+    place();
     open = true;
     await tick();
     inputEl?.focus();
@@ -130,7 +146,7 @@
   }
 </script>
 
-<svelte:window onclick={onWinClick} />
+<svelte:window onclick={onWinClick} onresize={() => open && place()} onscroll={() => open && place()} />
 
 <div class="relative inline-block" style={width !== "auto" ? `width:${width}` : ""}>
   <button
@@ -149,9 +165,8 @@
   {#if open}
     <div
       bind:this={panelEl}
-      class="absolute z-40 mt-1 min-w-[220px] max-w-[360px] rounded-md shadow-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800"
-      class:left-0={align === "left"}
-      class:right-0={align === "right"}
+      class="fixed z-50 max-w-[360px] rounded-md shadow-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800"
+      style={`left:${panelPos.left}px;top:${panelPos.top}px;width:${panelPos.width}px`}
       role="listbox">
       <div class="px-2 py-1.5 border-b border-zinc-200 dark:border-zinc-800 flex items-center gap-1.5">
         <Icon name="search" size={12} class="text-zinc-400" />

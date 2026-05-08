@@ -1,18 +1,12 @@
 <script lang="ts">
   import Icon from "./Icon.svelte";
-
-  // Saved quick-filter chips persist in localStorage. Defaults are seeded on
-  // first run so the bar is never empty. Each chip is one filter expression
-  // plus a short label.
-
-  type Chip = { label: string; expr: string };
-
-  const DEFAULTS: Chip[] = [
-    { label: "all", expr: "" },
-    { label: "info+", expr: "level:>=info" },
-    { label: "warn+", expr: "level:>=warn" },
-    { label: "error+", expr: "level:>=error" },
-  ];
+  import {
+    type QuickChip,
+    QUICK_CHANGED,
+    loadQuickChips,
+    persistQuickChips,
+    saveCurrentAsQuick,
+  } from "./quick-filters";
 
   let { activeFilter, currentFilter, onApply } = $props<{
     activeFilter: string;
@@ -20,20 +14,7 @@
     onApply: (expr: string) => void;
   }>();
 
-  function load(): Chip[] {
-    try {
-      const raw = localStorage.getItem("loggi.quick");
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed) && parsed.every((x: any) => typeof x?.label === "string" && typeof x?.expr === "string")) {
-          return parsed;
-        }
-      }
-    } catch {}
-    return DEFAULTS;
-  }
-
-  let chips = $state<Chip[]>(load());
+  let chips = $state<QuickChip[]>(loadQuickChips());
   let menuOpen = $state(false);
   let containerEl: HTMLDivElement | null = $state(null);
   let listEl: HTMLDivElement | null = $state(null);
@@ -42,34 +23,24 @@
   // is what we want.
   let visibleCount = $state(99);
 
-  function persist() {
-    try {
-      localStorage.setItem("loggi.quick", JSON.stringify(chips));
-    } catch {}
-  }
+  // Sync with external mutations (e.g. the sidebar's quick-save button).
+  $effect(() => {
+    const onChanged = () => (chips = loadQuickChips());
+    window.addEventListener(QUICK_CHANGED, onChanged);
+    return () => window.removeEventListener(QUICK_CHANGED, onChanged);
+  });
 
   function isActive(expr: string): boolean {
     return expr === activeFilter;
   }
 
   function saveCurrent() {
-    const expr = currentFilter.trim();
-    const label = prompt(`Name this quick filter${expr ? "" : " (saving empty filter)"}:`);
-    if (!label) return;
-    const trimmed = label.trim();
-    if (!trimmed) return;
-    if (chips.some((c) => c.label === trimmed)) {
-      if (!confirm(`Replace existing "${trimmed}"?`)) return;
-      chips = chips.map((c) => (c.label === trimmed ? { label: trimmed, expr } : c));
-    } else {
-      chips = [...chips, { label: trimmed, expr }];
-    }
-    persist();
+    if (saveCurrentAsQuick(currentFilter)) chips = loadQuickChips();
   }
 
   function remove(label: string) {
-    chips = chips.filter((c) => c.label !== label);
-    persist();
+    persistQuickChips(chips.filter((c) => c.label !== label));
+    chips = loadQuickChips();
   }
 
   // Measure visible chips: hide chips that overflow the container width and
