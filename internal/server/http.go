@@ -51,6 +51,7 @@ func (s *Server) serveHTTP(l net.Listener) {
 	mux.HandleFunc("/api/docker/containers", s.handleAPIDockerContainers)
 	mux.HandleFunc("/api/export", s.handleAPIExport)
 	mux.HandleFunc("/api/health", s.handleAPIHealth)
+	mux.HandleFunc("/api/columns", s.handleAPIColumns)
 	if s.opts.StaticFS != nil {
 		mux.Handle("/", s.opts.StaticFS)
 	} else {
@@ -194,6 +195,16 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAPISources(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(s.Sources())
+}
+
+// handleAPIColumns returns the names of currently-promoted hot columns. The
+// filter builder UI uses this to populate the column dropdown alongside its
+// built-ins (level, msg, source, etc.).
+func (s *Server) handleAPIColumns(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"hot": s.store.HotColumnNames(),
+	})
 }
 
 func (s *Server) handleAPIHealth(w http.ResponseWriter, _ *http.Request) {

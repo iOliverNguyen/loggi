@@ -29,8 +29,10 @@ type session struct {
 }
 
 type sessionSub struct {
-	subID uint64
-	storeID uint64 // store.Subscriber.ID
+	subID    uint64
+	storeID  uint64    // store.Subscriber.ID
+	node     filter.Node // parsed filter, kept for re-planning on history/filter-update
+	historyN int       // history depth requested at subscribe time
 }
 
 var sessionGen sessionIDGen
@@ -164,6 +166,8 @@ func (sess *session) handle(msg *wire.ClientMsg) {
 		if msg.StreamData != nil {
 			sess.handleStreamData(msg.StreamData)
 		}
+	case wire.CMsgHistory:
+		sess.handleHistory(msg)
 	case wire.CMsgPing:
 		nonce := uint64(0)
 		if msg.Ping != nil {
@@ -191,29 +195,51 @@ func (sess *session) handleSubscribe(msg *wire.ClientMsg) {
 	}
 	fn := filter.Compile(node, sess.srv.store)
 	storeSub := sess.srv.store.Subscribe(fn, sub.FromSeq)
+
+	// If a sub with the same SubID is already registered (resubscribe after
+	// reconnect with the same id), tear down the old one so its store
+	// subscription doesn't leak.
 	sess.subsMu.Lock()
-	sess.subs[sub.SubID] = &sessionSub{subID: sub.SubID, storeID: storeSub.ID}
+	if old, ok := sess.subs[sub.SubID]; ok {
+		sess.srv.store.Unsubscribe(old.storeID)
+	}
+	sess.subs[sub.SubID] = &sessionSub{
+		subID:    sub.SubID,
+		storeID:  storeSub.ID,
+		node:     node,
+		historyN: sub.HistoryN,
+	}
 	sess.subsMu.Unlock()
 
 	// Drain backlog if requested using the bitmap plan, which prunes
 	// candidate seqs via roaring intersections for indexed leaves before
 	// running the residual closure.
 	if sub.HistoryN > 0 {
-		head := sess.srv.store.Head()
-		tail := sess.srv.store.Tail()
-		lo := head
-		if uint64(sub.HistoryN) <= head-tail {
-			lo = head - uint64(sub.HistoryN)
-		} else {
-			lo = tail
-		}
-		plan := filter.CompilePlan(node, sess.srv.store)
-		seqs := sess.srv.store.QueryRangeBitmap(plan.Candidates, plan.Residual, lo, head, sub.HistoryN)
+		seqs := sess.queryBacklog(node, sub.HistoryN)
 		_ = sess.sendEntries(sub.SubID, seqs, 0)
 	}
 
 	go sess.pumpSub(sub.SubID, storeSub.ID)
 	sess.ack(msg.ID, true, sub.SubID, 0, "")
+}
+
+// queryBacklog returns the most recent up-to-limit matching seqs from the
+// store ring (clamped to [tail, head)), in ascending order.
+func (sess *session) queryBacklog(node filter.Node, limit int) []uint64 {
+	if limit <= 0 {
+		return nil
+	}
+	head := sess.srv.store.Head()
+	tail := sess.srv.store.Tail()
+	if head <= tail {
+		return nil
+	}
+	lo := tail
+	if uint64(limit) <= head-tail {
+		lo = head - uint64(limit)
+	}
+	plan := filter.CompilePlan(node, sess.srv.store)
+	return sess.srv.store.QueryRangeBitmap(plan.Candidates, plan.Residual, lo, head, limit)
 }
 
 func (sess *session) handleUpdateFilter(msg *wire.ClientMsg) {
@@ -232,7 +258,82 @@ func (sess *session) handleUpdateFilter(msg *wire.ClientMsg) {
 	}
 	fn := filter.Compile(node, sess.srv.store)
 	sess.srv.store.SetFilter(sub.storeID, fn)
+
+	// Cache the new node so future history requests use it.
+	sess.subsMu.Lock()
+	sub.node = node
+	sess.subsMu.Unlock()
+
+	// Send a backfill so the client doesn't lose visible history when the
+	// filter changes. Without this, the client clears its view and the
+	// server would only stream live rows going forward.
+	limit := sub.historyN
+	if limit <= 0 {
+		limit = 300
+	}
+	seqs := sess.queryBacklog(node, limit)
+	_ = sess.sendEntries(msg.Filter.SubID, seqs, 0)
+
 	sess.ack(msg.ID, true, msg.Filter.SubID, 0, "")
+}
+
+// handleHistory walks the ring backward from before_seq, returning up to
+// limit matching seqs against the subscription's current filter. End=true
+// means the range was exhausted (older entries unavailable in the buffer).
+func (sess *session) handleHistory(msg *wire.ClientMsg) {
+	h := msg.History
+	if h == nil {
+		return
+	}
+	sub := sess.lookupSub(h.SubID)
+	if sub == nil {
+		sess.errMsg(msg.ID, "no_sub", "")
+		return
+	}
+	limit := h.Limit
+	if limit <= 0 {
+		limit = 200
+	}
+
+	tail := sess.srv.store.Tail()
+	hi := min(h.BeforeSeq, sess.srv.store.Head())
+
+	if hi <= tail {
+		_ = sess.conn.Write(&wire.ServerMsg{Type: wire.SMsgBatch, Batch: &wire.LogBatch{
+			SubID: h.SubID, IsHistory: true, End: true,
+		}})
+		sess.ack(msg.ID, true, h.SubID, 0, "")
+		return
+	}
+
+	plan := filter.CompilePlan(sub.node, sess.srv.store)
+	// Forward scan over the whole history range, keeping a sliding window of
+	// the last `limit` matches via a ring buffer. Cheaper than collecting
+	// every match into a slice when the filter is loose.
+	all := sess.srv.store.QueryRangeBitmap(plan.Candidates, plan.Residual, tail, hi, 0)
+	end := len(all) <= limit
+	var seqs []uint64
+	if len(all) <= limit {
+		seqs = all
+	} else {
+		seqs = all[len(all)-limit:]
+	}
+
+	entries := make([]wire.Entry, 0, len(seqs))
+	for _, seq := range seqs {
+		row := sess.srv.store.Materialize(seq)
+		if row == nil {
+			continue
+		}
+		entries = append(entries, materializeToEntry(row))
+	}
+	_ = sess.conn.Write(&wire.ServerMsg{Type: wire.SMsgBatch, Batch: &wire.LogBatch{
+		SubID:     h.SubID,
+		Entries:   entries,
+		IsHistory: true,
+		End:       end,
+	}})
+	sess.ack(msg.ID, true, h.SubID, 0, "")
 }
 
 func (sess *session) handleAddSource(msg *wire.ClientMsg) {
@@ -268,12 +369,7 @@ func (sess *session) handleAddSource(msg *wire.ClientMsg) {
 		sess.srv.broadcastSourceState(id, "open", "")
 		sess.ack(msg.ID, true, 0, id, "")
 	case "docker":
-		name := a.Name
-		since, _ := a.Args["since"].(string)
-		if since == "" {
-			since = "10m"
-		}
-		id, err := sess.srv.AddDockerSource(name, since)
+		id, err := sess.srv.AddDockerSource(a.Name)
 		if err != nil {
 			sess.errMsg(msg.ID, "add_failed", err.Error())
 			return

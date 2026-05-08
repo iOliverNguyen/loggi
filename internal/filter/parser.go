@@ -510,6 +510,19 @@ func (p *parser) parseFieldValue(path []string) (Node, error) {
 		return nil, fmt.Errorf("filter: bad value after %s", t.text)
 	case tString, tIdent, tStar, tNumber:
 		p.advance()
+		// Glob-style "contains" on any field: foo:*bar*, foo:bar*, foo:*bar.
+		// The tokenizer emits any non-ident-shaped value as tStar, so the
+		// presence of '*' in the literal text is the cue that the user
+		// wanted a substring match rather than exact equality. A token that
+		// is *only* '*' chars trims to "" and would match every string,
+		// which is almost never what the user meant — reject it explicitly.
+		if t.kind == tStar && strings.Contains(t.text, "*") {
+			needle := strings.Trim(t.text, "*")
+			if needle == "" {
+				return nil, fmt.Errorf("filter: empty substring pattern %q", t.text)
+			}
+			return &SubstrNode{Path: path, Needle: needle}, nil
+		}
 		return &EqNode{Path: path, V: t.text}, nil
 	}
 	return nil, fmt.Errorf("filter: unexpected value token %q", t.text)

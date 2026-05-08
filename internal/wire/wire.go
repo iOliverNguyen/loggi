@@ -16,6 +16,7 @@ type ClientMsg struct {
 	AddSource   *AddSource      `json:"add_source,omitempty"`
 	RemoveSrc   *RemoveSource   `json:"remove_source,omitempty"`
 	StreamData  *StreamData     `json:"stream_data,omitempty"`
+	History     *History        `json:"history,omitempty"`
 	Ping        *Ping           `json:"ping,omitempty"`
 }
 
@@ -62,11 +63,23 @@ type StreamData struct {
 type Ping struct{ Nonce uint64 `json:"nonce"` }
 type Pong struct{ Nonce uint64 `json:"nonce"` }
 
+// History requests up to Limit matching entries strictly before BeforeSeq on
+// the existing subscription's filter. Reply is a LogBatch with IsHistory=true.
+// End=true on the reply indicates no more older entries are available
+// (we hit the store tail or the buffer floor).
+type History struct {
+	SubID     uint64 `json:"sub_id"`
+	BeforeSeq uint64 `json:"before_seq"`
+	Limit     int    `json:"limit"`
+}
+
 // LogBatch carries one or more log entries to a subscriber.
 type LogBatch struct {
-	SubID   uint64    `json:"sub_id"`
-	Entries []Entry   `json:"entries"`
-	GapN    uint64    `json:"gap_n,omitempty"` // entries dropped before this batch
+	SubID     uint64  `json:"sub_id"`
+	Entries   []Entry `json:"entries"`
+	GapN      uint64  `json:"gap_n,omitempty"`     // entries dropped before this batch
+	IsHistory bool    `json:"is_history,omitempty"` // reply to a History request — append, don't prepend
+	End       bool    `json:"end,omitempty"`        // History exhausted (older entries unavailable)
 }
 
 // Entry is the wire shape of a stored log row. The server materializes from
@@ -121,6 +134,7 @@ const (
 	CMsgAddSource   = "add_source"
 	CMsgRemoveSrc   = "remove_source"
 	CMsgStreamData  = "stream_data"
+	CMsgHistory     = "history"
 	CMsgPing        = "ping"
 
 	SMsgBatch    = "batch"

@@ -43,7 +43,7 @@ export interface Profile {
 export interface ServerMsg {
   type: string;
   id?: number;
-  batch?: { sub_id: number; entries: WireEntry[]; gap_n?: number };
+  batch?: { sub_id: number; entries: WireEntry[]; gap_n?: number; is_history?: boolean; end?: boolean };
   source?: SourceEventWire;
   ack?: { ok: boolean; ref_id?: number; sub_id?: number; src_id?: number; detail?: string };
   err?: { ref_id?: number; code: string; detail: string };

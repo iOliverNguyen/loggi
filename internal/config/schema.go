@@ -13,7 +13,7 @@ type Server struct {
 	IdleTimeout string `toml:"idle_timeout"` // duration string, default "5m"
 	RingBuffer  int    `toml:"ring_buffer"`  // entries, default 524288
 	RingBytes   string `toml:"ring_bytes"`   // size string, default "256MB"
-	HTTPBind    string `toml:"http_bind"`    // default "127.0.0.1:0"
+	HTTPBind    string `toml:"http_bind"`    // default "127.0.0.1:9199"
 }
 
 type UI struct {
@@ -51,7 +51,7 @@ func Defaults() Config {
 			IdleTimeout: "5m",
 			RingBuffer:  524288,
 			RingBytes:   "256MB",
-			HTTPBind:    "127.0.0.1:0",
+			HTTPBind:    "127.0.0.1:9199",
 		},
 		UI: UI{
 			Theme:           "auto",

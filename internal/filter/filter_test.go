@@ -140,7 +140,11 @@ func TestEmptyMatchesAll(t *testing.T) {
 }
 
 func TestParseErrors(t *testing.T) {
-	bad := []string{"(level:error", "level:[1..", "level:>="}
+	bad := []string{"(level:error", "level:[1..", "level:>=",
+		// `field:*` (or `field:**`) trims to an empty needle, which would
+		// match every value as a SubstrNode — almost never the user's
+		// intent. Reject explicitly so the user gets feedback.
+		"service:*", "service:**"}
 	for _, b := range bad {
 		_, err := Parse(b)
 		if err == nil {

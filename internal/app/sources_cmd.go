@@ -50,17 +50,15 @@ func NewStdinCmd() *cobra.Command {
 
 // NewDockerCmd is `loggi docker <container>`.
 func NewDockerCmd() *cobra.Command {
-	var since string
 	var noOpen bool
 	cmd := &cobra.Command{
 		Use:   "docker <container>",
 		Short: "Stream logs from a docker container",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			return tailDocker(args[0], since, !noOpen)
+			return tailDocker(args[0], !noOpen)
 		},
 	}
-	cmd.Flags().StringVar(&since, "since", "10m", "show logs since (e.g. 10m, 1h)")
 	cmd.Flags().BoolVar(&noOpen, "no-open", false, "don't open the browser")
 	return cmd
 }
@@ -153,7 +151,7 @@ func tailFiles(paths []string, openUI bool) error {
 	return nil
 }
 
-func tailDocker(name, since string, openUI bool) error {
+func tailDocker(name string, openUI bool) error {
 	conn, err := client.Dial(true)
 	if err != nil {
 		return err
@@ -165,7 +163,6 @@ func tailDocker(name, since string, openUI bool) error {
 		AddSource: &wire.AddSource{
 			Kind: "docker",
 			Name: name,
-			Args: map[string]any{"since": since},
 		},
 	}); err != nil {
 		return err

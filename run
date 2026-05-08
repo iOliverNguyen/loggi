@@ -62,9 +62,9 @@ run-test-all() {
 
 run-server() {
   usage-prompt "./run server — start the loggi daemon (foreground)" "$1"
-  if [ ! -x "$PROJECT_ROOT/loggi" ]; then
-    run-build
-  fi
+  # Always rebuild so a stale binary doesn't silently shadow recent changes.
+  # Go's build cache makes this fast when nothing's actually changed.
+  run-build
   p-info "starting loggi server (Ctrl-C to stop)"
   exec "$PROJECT_ROOT/loggi" server
 }

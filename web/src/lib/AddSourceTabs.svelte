@@ -1,11 +1,14 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import * as memory from "./source-memory";
+  import DockerHoverCard from "./DockerHoverCard.svelte";
 
   let { onAdd, onClose } = $props<{
     onAdd: (kind: "file" | "docker", name: string, args: Record<string, unknown>) => void;
     onClose: () => void;
   }>();
+
+  let hoverId = $state<string | null>(null);
 
   type Kind = "file" | "docker";
   type Container = {
@@ -22,7 +25,6 @@
   let dockerErr = $state("");
   let dockerLoading = $state(false);
   let dockerSearch = $state("");
-  let dockerSince = $state("10m");
 
   let savedFiles = $state<string[]>(memory.saved("file"));
   let recentFiles = $state<string[]>(memory.recent("file"));
@@ -53,7 +55,7 @@
   });
 
   function addContainer(name: string) {
-    onAdd("docker", name, { since: dockerSince || "10m" });
+    onAdd("docker", name, {});
     recentContainers = memory.pushRecent("docker", name);
     onClose();
   }
@@ -120,10 +122,6 @@
           class="flex-1 px-2 py-1 rounded bg-white dark:bg-zinc-800 mono"
           placeholder="filter containers…"
           bind:value={dockerSearch} />
-        <input
-          class="w-20 px-2 py-1 rounded bg-white dark:bg-zinc-800"
-          title="since"
-          bind:value={dockerSince} />
         <button
           class="px-2 py-1 rounded bg-zinc-200 dark:bg-zinc-700 hover:bg-zinc-300 dark:hover:bg-zinc-600"
           title="refresh"
@@ -142,14 +140,17 @@
         </div>
         <div class="max-h-40 overflow-y-auto space-y-0.5">
           {#each filteredContainers as c}
-            {@const name = c.names[0] ?? c.id.slice(0, 12)}
-            <div class="group flex items-center gap-1 px-1 py-0.5 rounded hover:bg-zinc-200 dark:hover:bg-zinc-800 cursor-pointer"
+            {@const name = (c.names[0] ?? c.id.slice(0, 12)).replace(/^\//, "")}
+            <div class="group relative flex items-center gap-1 px-1 py-0.5 rounded hover:bg-zinc-200 dark:hover:bg-zinc-800 cursor-pointer"
                  role="button"
                  tabindex="0"
                  onclick={() => addContainer(name)}
-                 onkeydown={(e) => e.key === "Enter" && addContainer(name)}>
-              <span class="mono truncate flex-1" title={`${name} · ${c.image}`}>{name}</span>
-              <span class="text-[10px] text-zinc-500 truncate max-w-[80px]">{c.image}</span>
+                 onkeydown={(e) => e.key === "Enter" && addContainer(name)}
+                 onmouseenter={() => (hoverId = c.id)}
+                 onmouseleave={() => { if (hoverId === c.id) hoverId = null; }}
+                 onfocus={() => (hoverId = c.id)}
+                 onblur={() => { if (hoverId === c.id) hoverId = null; }}>
+              <span class="mono truncate flex-1" title={name}>{name}</span>
               <button
                 class="opacity-0 group-hover:opacity-100 text-[10px] px-1 text-zinc-500 hover:text-amber-500"
                 title={savedContainers.includes(name) ? "unpin" : "pin"}
@@ -157,6 +158,9 @@
                   e.stopPropagation();
                   togglePin("docker", name);
                 }}>{savedContainers.includes(name) ? "★" : "☆"}</button>
+              {#if hoverId === c.id}
+                <DockerHoverCard container={c} />
+              {/if}
             </div>
           {/each}
           {#if !dockerLoading && filteredContainers.length === 0}

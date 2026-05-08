@@ -22,10 +22,14 @@ import (
 	"github.com/iOliverNguyen/loggi/internal/wire"
 )
 
+// DefaultHTTPBind is the bind address used when Options.HTTPBind is empty.
+// Kept fixed (not :0) so users can bookmark the SPA URL across restarts.
+const DefaultHTTPBind = "127.0.0.1:9199"
+
 // Options configures a Server.
 type Options struct {
 	SocketPath     string
-	HTTPBind       string // e.g. "127.0.0.1:0"
+	HTTPBind       string // e.g. "127.0.0.1:9199" — empty means default to DefaultHTTPBind
 	IdleTimeout    time.Duration
 	StoreCap       uint64
 	Logger         *log.Logger
@@ -172,7 +176,7 @@ func (s *Server) Start() error {
 	// HTTP / WebSocket
 	bind := s.opts.HTTPBind
 	if bind == "" {
-		bind = "127.0.0.1:0"
+		bind = DefaultHTTPBind
 	}
 	hl, err := net.Listen("tcp", bind)
 	if err != nil {
@@ -217,8 +221,12 @@ func (s *Server) Shutdown() {
 	}
 }
 
-// AddFileSource adds a tail-file source.
+// AddFileSource adds a tail-file source. Idempotent: if an open source with
+// the same path already exists, returns its id without creating a duplicate.
 func (s *Server) AddFileSource(path string) (uint64, error) {
+	if id, ok := s.findOpenSource(source.KindFile, path); ok {
+		return id, nil
+	}
 	id := s.srcGen.Next()
 	src := newFileSource(id, path)
 	return id, s.attach(id, src)
@@ -226,6 +234,7 @@ func (s *Server) AddFileSource(path string) (uint64, error) {
 
 // AddStdinSource adds a stdin-forwarded source. Returns the source id and a
 // pointer to the underlying stdin source so the calling session can push data.
+// Stdin sources are not deduped: each pipe deserves its own ingest stream.
 func (s *Server) AddStdinSource(name string) (uint64, *stdinSource, error) {
 	id := s.srcGen.Next()
 	src := newStdinSource(id, name)
@@ -235,14 +244,38 @@ func (s *Server) AddStdinSource(name string) (uint64, *stdinSource, error) {
 	return id, src, nil
 }
 
-// AddDockerSource adds a docker container source.
-func (s *Server) AddDockerSource(name, since string) (uint64, error) {
+// AddDockerSource adds a docker container source. Idempotent on container
+// name: re-clicking "Add" returns the existing id without spawning a parallel
+// tail. Initial backfill is fixed at 300 lines from the engine; older entries
+// flow through the store ring buffer via the History RPC.
+func (s *Server) AddDockerSource(name string) (uint64, error) {
+	if id, ok := s.findOpenSource(source.KindDocker, name); ok {
+		return id, nil
+	}
 	id := s.srcGen.Next()
-	src, err := newDockerSource(id, name, since)
+	src, err := newDockerSource(id, name)
 	if err != nil {
 		return 0, err
 	}
 	return id, s.attach(id, src)
+}
+
+// findOpenSource returns the id of an open source matching (kind, identifier)
+// — path for file, container name for docker. Used to dedupe Add*Source calls
+// so re-clicking "Add" or racing reconnects don't spawn parallel tails of the
+// same target.
+func (s *Server) findOpenSource(kind source.Kind, ident string) (uint64, bool) {
+	s.srcMu.RLock()
+	defer s.srcMu.RUnlock()
+	for id, r := range s.srcs {
+		if r.state != "open" {
+			continue
+		}
+		if r.src.Kind() == kind && r.src.Name() == ident {
+			return id, true
+		}
+	}
+	return 0, false
 }
 
 func (s *Server) attach(id uint64, src source.Source) error {
@@ -332,7 +365,7 @@ func (s *Server) ingester() {
 }
 
 func (s *Server) processLine(line source.RawLine) {
-	mode := s.detectMode(line.SourceID, line.Bytes)
+	mode, justSet := s.detectMode(line.SourceID, line.Bytes)
 	switch mode {
 	case "json":
 		s.store.Publish(store.AppendInput{SourceID: line.SourceID, JSON: line.Bytes})
@@ -345,32 +378,40 @@ func (s *Server) processLine(line source.RawLine) {
 			Level:    detectLevelHint(plain),
 		})
 	}
+	if justSet {
+		// Broadcast so clients learn the mode without needing a fresh snapshot.
+		s.broadcastSourceState(line.SourceID, "open", "")
+	}
 }
 
 // detectMode caches a per-source decision: on the first ingested line for a
 // source, decide JSON vs text. Once decided, mode is sticky and read-only.
 // rec.mode is an atomic.Pointer so the per-line check is uncontended.
-func (s *Server) detectMode(id uint64, line []byte) string {
+// justSet is true only for the goroutine that won the CAS — used by the
+// caller to broadcast a one-time mode-update event.
+func (s *Server) detectMode(id uint64, line []byte) (mode string, justSet bool) {
 	s.srcMu.RLock()
 	rec, ok := s.srcs[id]
 	s.srcMu.RUnlock()
 	if !ok {
 		// Anonymous; try JSON.
 		if isJSONObj(line) {
-			return "json"
+			return "json", false
 		}
-		return "text"
+		return "text", false
 	}
 	if m := rec.mode.Load(); m != nil {
-		return *m
+		return *m, false
 	}
-	mode := "text"
+	m := "text"
 	if isJSONObj(line) {
-		mode = "json"
+		m = "json"
 	}
-	rec.mode.CompareAndSwap(nil, &mode)
-	// Re-load: another goroutine may have CAS'd a different value first.
-	return *rec.mode.Load()
+	if rec.mode.CompareAndSwap(nil, &m) {
+		return m, true
+	}
+	// Lost the CAS race; re-read what the winner stored.
+	return *rec.mode.Load(), false
 }
 
 func isJSONObj(b []byte) bool {

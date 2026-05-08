@@ -6,9 +6,14 @@
   import { ansiToHTML } from "./lib/ansi";
   import DetailPanel from "./lib/DetailPanel.svelte";
   import AddSourceTabs from "./lib/AddSourceTabs.svelte";
+  import FilterBuilder from "./lib/FilterBuilder.svelte";
   import SaveProfileModal from "./lib/SaveProfileModal.svelte";
+  import ProfilesModal from "./lib/ProfilesModal.svelte";
+  import HelpModal from "./lib/HelpModal.svelte";
+  import QuickFilters from "./lib/QuickFilters.svelte";
   import StatusFooter from "./lib/StatusFooter.svelte";
   import DiffModal from "./lib/DiffModal.svelte";
+  import Icon from "./lib/Icon.svelte";
   import {
     readSessionFromHash,
     clearAddress,
@@ -24,8 +29,10 @@
   let lastError = $state<string>("");
 
   const SUB_ID = 1;
+  const INITIAL_HISTORY = 300;
+  const LOAD_MORE = 200;
   let filter = $state(localStorage.getItem("loggi.filter") ?? "");
-  let pendingFilter = $state(filter);
+  let pendingFilter = $state(localStorage.getItem("loggi.pendingFilter") ?? filter);
   let paused = $state(false);
   let theme = $state<"auto" | "light" | "dark">(
     (localStorage.getItem("loggi.theme") as any) ?? "auto",
@@ -38,10 +45,19 @@
   const MAX = 50000;
   let listEl: HTMLElement | null = $state(null);
   let stickToBottom = $state(true);
+  let historyLoading = $state(false);
+  let historyExhausted = $state(false);
 
   let showAddSource = $state(false);
+  let showFilters = $state(true);
 
   $effect(() => applyTheme(theme));
+  $effect(() => {
+    // Persist mid-edit filter so a reload doesn't lose typing.
+    try {
+      localStorage.setItem("loggi.pendingFilter", pendingFilter);
+    } catch {}
+  });
 
   onMount(async () => {
     // Apply session config from URL hash, if any, then strip the hash so the
@@ -84,9 +100,14 @@
     bus.onstatus = (open) => {
       connected = open;
       if (open) {
+        // A fresh subscribe means the server will resend backlog; reset our
+        // history-pagination state so scroll-to-bottom can fetch older rows
+        // again.
+        historyExhausted = false;
+        historyLoading = false;
         bus!.send({
           type: "subscribe",
-          subscribe: { sub_id: SUB_ID, filter, history_n: 200 },
+          subscribe: { sub_id: SUB_ID, filter, history_n: INITIAL_HISTORY },
         });
       }
     };
@@ -97,36 +118,42 @@
   function onMsg(m: any) {
     if (m.type === "snapshot") {
       // snapshot.sources is wire.SourceEvent-shaped (source_id) — normalize.
-      sources = (m.snapshot.sources ?? []).map((ev: any) => ({
-        id: ev.source_id,
-        kind: ev.kind,
-        name: ev.name,
-        mode: ev.mode ?? "",
-        state: ev.state,
-        detail: ev.detail,
-      }));
+      // Drop already-closed records: they shouldn't clutter the legend, and
+      // the server keeps them around in s.srcs for diagnostic purposes.
+      sources = (m.snapshot.sources ?? [])
+        .filter((ev: any) => ev.state !== "closed")
+        .map((ev: any) => ({
+          id: ev.source_id,
+          kind: ev.kind,
+          name: ev.name,
+          mode: ev.mode ?? "",
+          state: ev.state,
+          detail: ev.detail,
+        }));
+      // Discover new field names from any backfill that follows.
+      // (column discovery happens in batch handler too.)
     } else if (m.type === "source") {
       const ev = m.source;
+      if (ev.state === "closed") {
+        // Server confirmed removal — drop entirely so re-adding doesn't
+        // produce a phantom duplicate row.
+        sources = sources.filter((s) => s.id !== ev.source_id);
+        return;
+      }
       const idx = sources.findIndex((s) => s.id === ev.source_id);
-      if (idx === -1 && ev.state !== "closed") {
+      if (idx === -1) {
         sources = [
           ...sources,
           { id: ev.source_id, kind: ev.kind, name: ev.name, mode: ev.mode || "", state: ev.state, detail: ev.detail },
         ];
-      } else if (idx !== -1) {
-        if (ev.state === "closed") {
-          sources = sources.map((s) =>
-            s.id === ev.source_id ? { ...s, state: "closed", detail: ev.detail } : s,
-          );
-        } else {
-          sources[idx] = {
-            ...sources[idx],
-            state: ev.state,
-            mode: ev.mode || sources[idx].mode,
-            detail: ev.detail,
-          };
-          sources = [...sources];
-        }
+      } else {
+        sources[idx] = {
+          ...sources[idx],
+          state: ev.state,
+          mode: ev.mode || sources[idx].mode,
+          detail: ev.detail,
+        };
+        sources = [...sources];
       }
       if (ev.state === "error" && ev.detail) {
         lastError = `${ev.name || `#${ev.source_id}`}: ${ev.detail}`;
@@ -135,16 +162,69 @@
     } else if (m.type === "batch" && m.batch) {
       if (m.batch.gap_n) dropped += m.batch.gap_n;
       const incoming = (m.batch.entries ?? []).map(decodeEntry);
-      entries = [...incoming.reverse(), ...entries].slice(0, MAX);
-      if (stickToBottom) {
-        tick().then(() => {
-          if (listEl) listEl.scrollTop = 0;
-        });
+      // Track field names discovered from each row's nested JSON for the
+      // filter builder's column dropdown.
+      for (const e of incoming) collectFieldPaths(e.fields);
+
+      const seen = new Set(entries.map((e) => e.seq));
+      const fresh = incoming.filter((e) => !seen.has(e.seq));
+
+      if (m.batch.is_history) {
+        // Older rows: append at the tail (newest-at-top ordering preserved).
+        entries = [...entries, ...fresh.reverse()];
+        if (entries.length > MAX) entries = entries.slice(entries.length - MAX);
+        historyLoading = false;
+        if (m.batch.end || fresh.length === 0) historyExhausted = true;
+      } else {
+        // Live + initial backlog: prepend.
+        entries = [...fresh.reverse(), ...entries].slice(0, MAX);
+        if (stickToBottom) {
+          tick().then(() => {
+            if (listEl) listEl.scrollTop = 0;
+          });
+        }
+      }
+    } else if (m.type === "ack") {
+      // Acks are mostly informational; the source/batch events do the
+      // user-visible work. Surface a brief toast for add/remove since those
+      // are user-initiated and otherwise silent.
+      const a = m.ack;
+      if (a?.ok && a.src_id) {
+        // src_id is set for both add and remove — message text would be
+        // ambiguous, so we just keep this hook silent. Toast surfacing
+        // happens in addSource/removeSource flows.
       }
     } else if (m.type === "err") {
       lastError = m.err?.detail || m.err?.code || "error";
       setTimeout(() => (lastError = ""), 5000);
+      historyLoading = false;
     }
+  }
+
+  // discoveredFields accumulates dotted paths seen in entry.fields so the
+  // filter builder can offer them as columns. Bounded to keep memory tight.
+  let discoveredFields = $state(new Set<string>());
+  function collectFieldPaths(obj: unknown, prefix = "") {
+    if (!obj || typeof obj !== "object" || Array.isArray(obj)) return;
+    if (discoveredFields.size > 256) return;
+    for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
+      const path = prefix ? `${prefix}.${k}` : k;
+      discoveredFields.add(path);
+      if (v && typeof v === "object" && !Array.isArray(v)) {
+        collectFieldPaths(v, path);
+      }
+    }
+    discoveredFields = discoveredFields; // notify Svelte
+  }
+
+  function requestHistory() {
+    if (!entries.length || historyLoading || historyExhausted) return;
+    const oldest = entries[entries.length - 1].seq;
+    historyLoading = true;
+    bus?.send({
+      type: "history",
+      history: { sub_id: SUB_ID, before_seq: oldest, limit: LOAD_MORE },
+    });
   }
 
   function applyFilter() {
@@ -154,6 +234,11 @@
     entries = [];
     dropped = 0;
     lastError = "";
+    // The server now resends a backlog after SetFilter, so the view will
+    // repopulate immediately. Reset the load-more sentinel so a long scroll
+    // can pull deeper history under the new filter.
+    historyExhausted = false;
+    historyLoading = false;
   }
 
   function selectProfile(name: string) {
@@ -239,7 +324,10 @@
     return sources.find((s) => s.id === id)?.name ?? `#${id}`;
   }
   function quoteIfNeeded(v: string): string {
-    return /[\s:()\[\]"]/.test(v) ? `"${v.replace(/"/g, '\\"')}"` : v;
+    if (/[\s:()\[\]"\\*]/.test(v)) {
+      return `"${v.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+    }
+    return v;
   }
 
   function levelClass(l?: string) {
@@ -279,6 +367,8 @@
   let filterInputEl: HTMLInputElement | null = $state(null);
   let showHelp = $state(false);
   let showExportMenu = $state(false);
+  let showProfilesModal = $state(false);
+  const iconBtnCls = "p-1.5 rounded bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300";
 
   let selectedSet = $state(new Set<number>());
   let lastClickedSeq = $state<number | null>(null);
@@ -476,6 +566,11 @@
   function onScroll() {
     if (!listEl) return;
     stickToBottom = listEl.scrollTop < 32;
+    // Bottom of the list = oldest entry. When the user scrolls near it,
+    // pull older history. Threshold is generous so the next page lands
+    // before they reach the literal end.
+    const distFromBottom = listEl.scrollHeight - listEl.scrollTop - listEl.clientHeight;
+    if (distFromBottom < 240) requestHistory();
   }
 
   function addSource(kind: "file" | "docker", name: string, args: Record<string, unknown>) {
@@ -486,6 +581,11 @@
   }
 
   function removeSource(id: number) {
+    // Optimistic transition: reflect the click immediately so the user sees
+    // the row dim and the X button disable. The server's "closed" broadcast
+    // then removes the row entirely; an err reply leaves the row dimmed
+    // (the lastError toast tells the user what happened).
+    sources = sources.map((s) => s.id === id ? { ...s, state: "closing" } : s);
     bus?.send({ type: "remove_source", remove_source: { source_id: id } });
   }
 </script>
@@ -500,48 +600,81 @@
       class={connected ? "text-emerald-500" : "text-red-500"}>●</span>
 
     {#if profiles.length > 0}
-      <select
-        class="px-2 py-1 rounded bg-zinc-100 dark:bg-zinc-800 text-sm border border-transparent focus:border-sky-500 outline-none"
-        value={activeProfile}
-        onchange={(e) => selectProfile((e.currentTarget as HTMLSelectElement).value)}>
-        {#each profiles as p}
-          <option value={p.name}>{p.name}</option>
-        {/each}
-      </select>
+      <div class="flex items-center">
+        <select
+          class="pl-2 pr-1 py-1 rounded-l bg-zinc-100 dark:bg-zinc-800 text-sm border border-transparent focus:border-sky-500 outline-none"
+          value={activeProfile}
+          onchange={(e) => selectProfile((e.currentTarget as HTMLSelectElement).value)}>
+          {#each profiles as p}
+            <option value={p.name}>{p.name}</option>
+          {/each}
+        </select>
+        <button
+          class="px-1.5 py-1 rounded-r bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100 border-l border-zinc-200 dark:border-zinc-700"
+          title="manage profiles"
+          aria-label="manage profiles"
+          onclick={() => (showProfilesModal = true)}>
+          <Icon name="settings" size={14} />
+        </button>
+      </div>
     {/if}
 
-    <input
-      bind:this={filterInputEl}
-      class="flex-1 bg-zinc-100 dark:bg-zinc-900 px-3 py-1.5 rounded mono text-sm border border-transparent focus:border-sky-500 outline-none"
-      placeholder='filter — / to focus · ? for hotkeys'
-      bind:value={pendingFilter}
-      onkeydown={(e) => e.key === "Enter" && applyFilter()} />
+    <div class="relative flex-1 min-w-0">
+      <span class="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-400">
+        <Icon name="search" size={14} />
+      </span>
+      <input
+        bind:this={filterInputEl}
+        class="w-full bg-zinc-100 dark:bg-zinc-900 pl-8 pr-3 py-1.5 rounded mono text-sm border border-transparent focus:border-sky-500 outline-none"
+        placeholder="filter — / to focus · ? for help"
+        bind:value={pendingFilter}
+        onkeydown={(e) => e.key === "Enter" && applyFilter()} />
+    </div>
 
     <button
       class="px-3 py-1 rounded bg-sky-600 text-white text-sm hover:bg-sky-700"
       onclick={applyFilter}>Apply</button>
+
     <button
-      class="px-3 py-1 rounded bg-zinc-200 dark:bg-zinc-800 text-sm"
-      onclick={togglePause}>{paused ? "Resume" : "Pause"}</button>
+      class={iconBtnCls}
+      title={paused ? "Resume (Space)" : "Pause (Space)"}
+      aria-label={paused ? "Resume" : "Pause"}
+      onclick={togglePause}>
+      <Icon name={paused ? "play" : "pause"} size={16} />
+    </button>
     <button
-      class="px-3 py-1 rounded bg-zinc-200 dark:bg-zinc-800 text-sm"
-      onclick={clear}>Clear</button>
+      class={iconBtnCls}
+      title="Clear log view"
+      aria-label="clear"
+      onclick={clear}>
+      <Icon name="trash" size={16} />
+    </button>
     <button
-      class="px-3 py-1 rounded bg-zinc-200 dark:bg-zinc-800 text-sm"
-      title="save current filter as a profile"
-      onclick={() => (showSaveProfile = true)}>Save</button>
+      class={iconBtnCls}
+      title="Save current filter as profile"
+      aria-label="save profile"
+      onclick={() => (showSaveProfile = true)}>
+      <Icon name="save" size={16} />
+    </button>
     <button
-      class="px-3 py-1 rounded bg-zinc-200 dark:bg-zinc-800 text-sm"
-      title="copy a shareable URL that restores this view"
-      onclick={copyShareURL}>Share</button>
+      class={iconBtnCls}
+      title="Copy share URL (⌘L)"
+      aria-label="share"
+      onclick={copyShareURL}>
+      <Icon name="link" size={16} />
+    </button>
     <div class="relative">
       <button
-        class="px-3 py-1 rounded bg-zinc-200 dark:bg-zinc-800 text-sm"
-        title="export the current filter as JSON"
-        onclick={() => (showExportMenu = !showExportMenu)}>Export ▾</button>
+        class={iconBtnCls + " inline-flex items-center gap-0.5"}
+        title="Export"
+        aria-label="export"
+        onclick={() => (showExportMenu = !showExportMenu)}>
+        <Icon name="download" size={16} />
+        <Icon name="chevron-down" size={12} class="opacity-60" />
+      </button>
       {#if showExportMenu}
         <div
-          class="absolute right-0 mt-1 w-48 rounded shadow-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 z-30 text-sm"
+          class="absolute right-0 mt-1 w-52 rounded shadow-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 z-30 text-sm"
           role="menu"
           tabindex="-1"
           onclick={(e) => e.stopPropagation()}
@@ -564,27 +697,33 @@
         </div>
       {/if}
     </div>
-    <select
-      class="px-2 py-1 rounded bg-zinc-200 dark:bg-zinc-800 text-sm"
-      bind:value={theme}>
-      <option value="auto">Auto</option>
-      <option value="light">Light</option>
-      <option value="dark">Dark</option>
-    </select>
+    <button
+      class={iconBtnCls}
+      title="Theme: {theme}"
+      aria-label="cycle theme"
+      onclick={() => (theme = theme === "auto" ? "light" : theme === "light" ? "dark" : "auto")}>
+      <Icon name={theme === "dark" ? "moon" : theme === "light" ? "sun" : "monitor"} size={16} />
+    </button>
+    <button
+      class={iconBtnCls}
+      title="Help (?)"
+      aria-label="help"
+      onclick={() => (showHelp = true)}>
+      <Icon name="help" size={16} />
+    </button>
   </header>
 
-  <!-- quick filters strip -->
-  <div
-    class="px-4 py-1.5 border-b border-zinc-200 dark:border-zinc-800 flex items-center gap-2 text-xs">
-    <span class="text-zinc-500">Quick:</span>
-    <button class="px-2 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200" onclick={() => quickLevel("")}>all</button>
-    <button class="px-2 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200" onclick={() => quickLevel("level:>=info")}>info+</button>
-    <button class="px-2 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200" onclick={() => quickLevel("level:>=warn")}>warn+</button>
-    <button class="px-2 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200" onclick={() => quickLevel("level:>=error")}>error+</button>
-    <span class="ml-4 text-zinc-500">{entries.length} rows{paused ? " · paused" : ""}{!stickToBottom ? " · scrolled" : ""}</span>
+  <QuickFilters
+    activeFilter={filter}
+    currentFilter={pendingFilter}
+    onApply={(expr) => quickLevel(expr)} />
+
+  <!-- status row: counts and notices -->
+  <div class="px-4 py-1 border-b border-zinc-200 dark:border-zinc-800 flex items-center gap-2 text-[11px] text-zinc-500">
+    <span>{entries.length} rows{paused ? " · paused" : ""}{!stickToBottom ? " · scrolled" : ""}</span>
     {#if selectedSet.size > 0}
       <span class="text-amber-600 dark:text-amber-400">· {selectedSet.size} selected</span>
-      <button class="ml-1 text-[10px] text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200"
+      <button class="text-[10px] text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200"
               onclick={clearSelection}>(clear)</button>
     {/if}
     {#if dropped > 0}
@@ -599,12 +738,24 @@
     <!-- sidebar -->
     <aside
       class="w-64 border-r border-zinc-200 dark:border-zinc-800 p-3 text-sm overflow-y-auto">
+      <FilterBuilder
+        expression={filter}
+        {discoveredFields}
+        onApply={(expr) => {
+          pendingFilter = expr;
+          applyFilter();
+        }} />
+      <div class="border-t border-zinc-200 dark:border-zinc-800 my-3"></div>
+
       <div class="flex items-center justify-between mb-2">
         <h2 class="font-semibold">Sources</h2>
         <button
-          class="text-xs px-2 py-0.5 rounded bg-sky-600 text-white hover:bg-sky-700"
+          class="p-1 rounded bg-sky-600 text-white hover:bg-sky-700"
           onclick={() => (showAddSource = !showAddSource)}
-          title="Add source">+</button>
+          title="Add source"
+          aria-label="add source">
+          <Icon name="plus" size={12} />
+        </button>
       </div>
 
       {#if showAddSource}
@@ -620,13 +771,17 @@
         </p>
       {/if}
       {#each sources as src}
-        <div class="mb-2 group">
+        <div class="mb-2 group" class:opacity-50={src.state === "closing"}>
           <div class="flex items-center justify-between gap-1">
             <div class="mono text-xs truncate flex-1" title={src.name}>{src.name}</div>
             <button
-              class="opacity-0 group-hover:opacity-100 text-xs text-zinc-500 hover:text-red-500"
-              title="Remove"
-              onclick={() => removeSource(src.id)}>×</button>
+              class="opacity-0 group-hover:opacity-100 text-zinc-500 hover:text-red-500 disabled:hover:text-zinc-500 disabled:cursor-not-allowed"
+              title={src.state === "closing" ? "Closing…" : "Remove"}
+              aria-label="remove source"
+              disabled={src.state === "closing"}
+              onclick={() => removeSource(src.id)}>
+              <Icon name="x" size={12} />
+            </button>
           </div>
           <div class="text-xs text-zinc-500">
             {src.kind} · {src.mode || "?"} ·
@@ -717,6 +872,11 @@
           </div>
         </div>
       {/each}
+      {#if entries.length > 0 && historyLoading}
+        <div class="text-center text-[11px] text-zinc-500 py-2">Loading older…</div>
+      {:else if entries.length > 0 && historyExhausted}
+        <div class="text-center text-[10px] text-zinc-400 py-2">— end of history —</div>
+      {/if}
     </main>
 
     {#if selectedEntry}
@@ -753,39 +913,20 @@
 {/if}
 
 {#if showHelp}
-  <div
-    class="fixed inset-0 bg-black/40 z-40 flex items-center justify-center"
-    role="button"
-    tabindex="-1"
-    onclick={() => (showHelp = false)}
-    onkeydown={(e) => e.key === "Escape" && (showHelp = false)}>
-    <div
-      class="bg-white dark:bg-zinc-900 rounded-lg shadow-xl p-5 w-[460px] text-sm"
-      role="dialog"
-      tabindex="-1"
-      onclick={(e) => e.stopPropagation()}
-      onkeydown={(e) => e.stopPropagation()}>
-      <div class="flex items-center justify-between mb-3">
-        <h2 class="font-semibold">Keyboard shortcuts</h2>
-        <button class="text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 px-2"
-                onclick={() => (showHelp = false)}>×</button>
-      </div>
-      <ul class="space-y-1.5 mono text-xs">
-        <li class="flex justify-between"><span>focus filter</span><kbd class="px-1.5 py-0.5 rounded bg-zinc-200 dark:bg-zinc-800">/</kbd></li>
-        <li class="flex justify-between"><span>blur input / close panel / overlay</span><kbd class="px-1.5 py-0.5 rounded bg-zinc-200 dark:bg-zinc-800">Esc</kbd></li>
-        <li class="flex justify-between"><span>row down / up</span><span><kbd class="px-1.5 py-0.5 rounded bg-zinc-200 dark:bg-zinc-800">j</kbd> <kbd class="px-1.5 py-0.5 rounded bg-zinc-200 dark:bg-zinc-800">k</kbd></span></li>
-        <li class="flex justify-between"><span>jump top / bottom</span><span><kbd class="px-1.5 py-0.5 rounded bg-zinc-200 dark:bg-zinc-800">g</kbd> <kbd class="px-1.5 py-0.5 rounded bg-zinc-200 dark:bg-zinc-800">G</kbd></span></li>
-        <li class="flex justify-between"><span>open detail panel</span><kbd class="px-1.5 py-0.5 rounded bg-zinc-200 dark:bg-zinc-800">Enter</kbd></li>
-        <li class="flex justify-between"><span>pause / resume</span><kbd class="px-1.5 py-0.5 rounded bg-zinc-200 dark:bg-zinc-800">Space</kbd></li>
-        <li class="flex justify-between"><span>copy share URL</span><kbd class="px-1.5 py-0.5 rounded bg-zinc-200 dark:bg-zinc-800">⌘L</kbd></li>
-        <li class="flex justify-between"><span>copy selected rows</span><kbd class="px-1.5 py-0.5 rounded bg-zinc-200 dark:bg-zinc-800">⌘C</kbd></li>
-        <li class="flex justify-between"><span>pin / unpin row</span><kbd class="px-1.5 py-0.5 rounded bg-zinc-200 dark:bg-zinc-800">p</kbd></li>
-        <li class="flex justify-between"><span>diff 2 selected rows</span><kbd class="px-1.5 py-0.5 rounded bg-zinc-200 dark:bg-zinc-800">d</kbd></li>
-        <li class="flex justify-between"><span>multi-select</span><span><kbd class="px-1.5 py-0.5 rounded bg-zinc-200 dark:bg-zinc-800">⌘click</kbd> <kbd class="px-1.5 py-0.5 rounded bg-zinc-200 dark:bg-zinc-800">⇧click</kbd></span></li>
-        <li class="flex justify-between"><span>this overlay</span><kbd class="px-1.5 py-0.5 rounded bg-zinc-200 dark:bg-zinc-800">?</kbd></li>
-      </ul>
-    </div>
-  </div>
+  <HelpModal onClose={() => (showHelp = false)} />
+{/if}
+
+{#if showProfilesModal}
+  <ProfilesModal
+    {profiles}
+    {activeProfile}
+    currentFilter={filter}
+    onClose={() => (showProfilesModal = false)}
+    onChanged={refreshProfiles}
+    onActivate={(name) => {
+      selectProfile(name);
+      showProfilesModal = false;
+    }} />
 {/if}
 
 {#if toast}

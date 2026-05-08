@@ -18,17 +18,16 @@ import (
 type Source struct {
 	id        uint64
 	container string
-	since     string
 	cli       *dclient.Client
 	closed    atomic.Bool
 }
 
-func New(id uint64, containerName, since string) (*Source, error) {
+func New(id uint64, containerName string) (*Source, error) {
 	cli, err := dclient.NewClientWithOpts(dclient.FromEnv, dclient.WithAPIVersionNegotiation())
 	if err != nil {
 		return nil, err
 	}
-	return &Source{id: id, container: containerName, since: since, cli: cli}, nil
+	return &Source{id: id, container: containerName, cli: cli}, nil
 }
 
 func (s *Source) ID() uint64        { return s.id }
@@ -51,8 +50,7 @@ func (s *Source) Run(ctx context.Context, out chan<- source.RawLine) error {
 		ShowStdout: true,
 		ShowStderr: true,
 		Follow:     true,
-		Tail:       "100",
-		Since:      s.since,
+		Tail:       "300",
 		Timestamps: false,
 	})
 	if err != nil {

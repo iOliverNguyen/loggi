@@ -10,6 +10,7 @@ export type ClientMsg = {
   filter?: { sub_id: number; filter: string };
   add_source?: { kind: string; name?: string; args?: Record<string, unknown> };
   remove_source?: { source_id: number };
+  history?: { sub_id: number; before_seq: number; limit: number };
   ping?: { nonce: number };
 };
 
