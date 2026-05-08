@@ -225,6 +225,11 @@ func (sess *session) handleSubscribe(msg *wire.ClientMsg) {
 
 // queryBacklog returns the most recent up-to-limit matching seqs from the
 // store ring (clamped to [tail, head)), in ascending order.
+//
+// Scans the entire ring rather than the last `limit` seqs — a sparse filter
+// (e.g. a brushed time window in older history) might have all its matches
+// outside the most-recent slice, which would otherwise return zero rows
+// even though plenty of matches exist in the ring.
 func (sess *session) queryBacklog(node filter.Node, limit int) []uint64 {
 	if limit <= 0 {
 		return nil
@@ -234,12 +239,12 @@ func (sess *session) queryBacklog(node filter.Node, limit int) []uint64 {
 	if head <= tail {
 		return nil
 	}
-	lo := tail
-	if uint64(limit) <= head-tail {
-		lo = head - uint64(limit)
-	}
 	plan := filter.CompilePlan(node, sess.srv.store)
-	return sess.srv.store.QueryRangeBitmap(plan.Candidates, plan.Residual, lo, head, limit)
+	all := sess.srv.store.QueryRangeBitmap(plan.Candidates, plan.Residual, tail, head, 0)
+	if len(all) <= limit {
+		return all
+	}
+	return all[len(all)-limit:]
 }
 
 func (sess *session) handleUpdateFilter(msg *wire.ClientMsg) {
