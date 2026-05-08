@@ -14,6 +14,7 @@
   import StatusFooter from "./lib/StatusFooter.svelte";
   import DiffModal from "./lib/DiffModal.svelte";
   import Icon from "./lib/Icon.svelte";
+  import RowContextMenu from "./lib/RowContextMenu.svelte";
   import {
     readSessionFromHash,
     clearAddress,
@@ -27,6 +28,24 @@
   let sources = $state<SourceInfo[]>([]);
   let dropped = $state(0);
   let lastError = $state<string>("");
+
+  // UI density: row padding/leading. Persisted; defaults to "cozy".
+  type Density = "compact" | "cozy" | "comfortable";
+  let density = $state<Density>(
+    (localStorage.getItem("loggi.density") as Density) ?? "cozy",
+  );
+  $effect(() => {
+    try { localStorage.setItem("loggi.density", density); } catch {}
+  });
+
+  // In-page highlight term (separate from server-side filter). Empty string
+  // = no highlighting. Substring match against msg, case-insensitive.
+  let highlight = $state(localStorage.getItem("loggi.highlight") ?? "");
+  let highlightBarOpen = $state(false);
+  let highlightInputEl: HTMLInputElement | null = $state(null);
+  $effect(() => {
+    try { localStorage.setItem("loggi.highlight", highlight); } catch {}
+  });
 
   const SUB_ID = 1;
   const INITIAL_HISTORY = 300;
@@ -51,6 +70,49 @@
   let showAddSource = $state(false);
   let showFilters = $state(true);
 
+  // Highlight regex/hit count derive after `entries` and `highlight` are
+  // declared (above). Defined here because we need them late in the script.
+  let highlightRe = $derived.by(() => {
+    if (!highlight) return null;
+    try {
+      const escaped = highlight.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      return new RegExp(`(${escaped})`, "ig");
+    } catch {
+      return null;
+    }
+  });
+  function escapeHtml(s: string): string {
+    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+  function highlightMsg(s: string): string {
+    if (!highlightRe || !s) return escapeHtml(s);
+    return escapeHtml(s).replace(
+      highlightRe,
+      '<mark class="bg-yellow-200 dark:bg-yellow-700/60 text-inherit rounded-sm px-0.5">$1</mark>',
+    );
+  }
+  let highlightHits = $derived.by(() => {
+    if (!highlightRe) return 0;
+    let n = 0;
+    for (const e of entries) {
+      const m = (e.msg ?? "").match(highlightRe);
+      if (m) n += m.length;
+    }
+    return n;
+  });
+
+  // Live indicator: pulses when we received a non-history batch in the last
+  // ~1.5s. lastLiveAt is updated in onMsg; liveTick drives a re-evaluation.
+  let lastLiveAt = $state(0);
+  let liveTick = $state(0);
+  $effect(() => {
+    const t = setInterval(() => (liveTick = Date.now()), 500);
+    return () => clearInterval(t);
+  });
+  let isLivePulse = $derived(
+    connected && !paused && stickToBottom && liveTick - lastLiveAt < 1500,
+  );
+
   $effect(() => applyTheme(theme));
   $effect(() => {
     // Persist mid-edit filter so a reload doesn't lose typing.
@@ -73,6 +135,9 @@
       if (hashCfg.paused) paused = true;
       if (hashCfg.theme) theme = hashCfg.theme;
       if (hashCfg.panel?.seq !== undefined) selectedSeq = hashCfg.panel.seq;
+      if (hashCfg.selected?.length) selectedSet = new Set(hashCfg.selected);
+      if (hashCfg.highlight !== undefined) highlight = hashCfg.highlight;
+      if (hashCfg.density) density = hashCfg.density;
       clearAddress();
     }
 
@@ -178,6 +243,7 @@
       } else {
         // Live + initial backlog: prepend.
         entries = [...fresh.reverse(), ...entries].slice(0, MAX);
+        if (fresh.length > 0) lastLiveAt = Date.now();
         if (stickToBottom) {
           tick().then(() => {
             if (listEl) listEl.scrollTop = 0;
@@ -291,6 +357,9 @@
       paused: paused || undefined,
       theme: theme !== "auto" ? theme : undefined,
       panel: selectedSeq !== null ? { seq: selectedSeq } : undefined,
+      selected: selectedSet.size > 0 ? [...selectedSet].sort((a, b) => a - b) : undefined,
+      highlight: highlight || undefined,
+      density: density !== "cozy" ? density : undefined,
     };
     const url = shareURL(cfg);
     try {
@@ -393,6 +462,31 @@
     else flashToast("select exactly 2 rows to diff");
   }
 
+  let ctxMenu = $state<{ entry: Entry; x: number; y: number } | null>(null);
+  function openContextMenu(ev: MouseEvent, entry: Entry) {
+    ev.preventDefault();
+    ctxMenu = { entry, x: ev.clientX, y: ev.clientY };
+  }
+  function copyEntryMsg(e: Entry) {
+    navigator.clipboard.writeText(e.msg ?? "").catch(() => {});
+    flashToast("message copied");
+  }
+  function copyEntryJSON(e: Entry) {
+    navigator.clipboard
+      .writeText(JSON.stringify({
+        seq: e.seq, ts: e.ts, source_id: e.source_id, source: sourceName(e.source_id),
+        level: e.level, service: e.service, msg: e.msg, fields: e.fields,
+      }, null, 2))
+      .catch(() => {});
+    flashToast("row copied");
+  }
+  function toggleSelectionFor(seq: number) {
+    const next = new Set(selectedSet);
+    next.has(seq) ? next.delete(seq) : next.add(seq);
+    selectedSet = next;
+    lastClickedSeq = seq;
+  }
+
   function rowClick(ev: MouseEvent, seq: number) {
     if (ev.metaKey || ev.ctrlKey) {
       ev.preventDefault();
@@ -482,6 +576,15 @@
     if ((e.metaKey || e.ctrlKey) && (e.key === "l" || e.key === "L")) {
       e.preventDefault();
       copyShareURL();
+      return;
+    }
+    if ((e.metaKey || e.ctrlKey) && (e.key === "f" || e.key === "F")) {
+      e.preventDefault();
+      highlightBarOpen = true;
+      tick().then(() => {
+        highlightInputEl?.focus();
+        highlightInputEl?.select();
+      });
       return;
     }
     if ((e.metaKey || e.ctrlKey) && (e.key === "c" || e.key === "C") && selectedSet.size > 0) {
@@ -596,8 +699,16 @@
     class="border-b border-zinc-200 dark:border-zinc-800 px-4 py-2 flex items-center gap-2 bg-white/70 dark:bg-zinc-900/70 backdrop-blur">
     <strong class="mono">loggi</strong>
     <span
-      title={connected ? "connected" : "disconnected"}
-      class={connected ? "text-emerald-500" : "text-red-500"}>●</span>
+      class="relative inline-flex w-2.5 h-2.5"
+      title={!connected ? "disconnected" : isLivePulse ? "live" : paused ? "paused" : "connected"}>
+      {#if isLivePulse}
+        <span class="absolute inline-flex w-full h-full rounded-full bg-emerald-400 opacity-75 animate-ping"></span>
+      {/if}
+      <span
+        class={`relative inline-flex w-2.5 h-2.5 rounded-full ${
+          !connected ? "bg-red-500" : paused ? "bg-amber-500" : "bg-emerald-500"
+        }`}></span>
+    </span>
 
     {#if profiles.length > 0}
       <div class="flex items-center">
@@ -699,6 +810,13 @@
     </div>
     <button
       class={iconBtnCls}
+      title={`Density: ${density} (click to cycle)`}
+      aria-label="cycle density"
+      onclick={() => (density = density === "compact" ? "cozy" : density === "cozy" ? "comfortable" : "compact")}>
+      <Icon name="columns" size={16} />
+    </button>
+    <button
+      class={iconBtnCls}
       title="Theme: {theme}"
       aria-label="cycle theme"
       onclick={() => (theme = theme === "auto" ? "light" : theme === "light" ? "dark" : "auto")}>
@@ -712,6 +830,31 @@
       <Icon name="help" size={16} />
     </button>
   </header>
+
+  <!-- highlight bar: in-page substring highlighting (separate from server-side filter) -->
+  {#if highlight || highlightBarOpen}
+    <div class="px-4 py-1 border-b border-zinc-200 dark:border-zinc-800 flex items-center gap-2 text-xs bg-yellow-50 dark:bg-yellow-950/30">
+      <span class="text-zinc-500">Highlight:</span>
+      <input
+        bind:this={highlightInputEl}
+        class="flex-1 max-w-md px-2 py-0.5 rounded bg-white dark:bg-zinc-800 mono text-[11px] border border-transparent focus:border-amber-500 outline-none"
+        placeholder="substring to highlight in messages"
+        bind:value={highlight}
+        onkeydown={(e) => {
+          if (e.key === "Escape") { highlight = ""; highlightBarOpen = false; (e.target as HTMLElement).blur(); }
+        }} />
+      {#if highlight}
+        <span class="text-zinc-500 mono text-[10px]">{highlightHits} match{highlightHits === 1 ? "" : "es"}</span>
+      {/if}
+      <button
+        class="text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
+        title="close"
+        aria-label="close highlight"
+        onclick={() => { highlight = ""; highlightBarOpen = false; }}>
+        <Icon name="x" size={14} />
+      </button>
+    </div>
+  {/if}
 
   <QuickFilters
     activeFilter={filter}
@@ -811,7 +954,8 @@
                  onclick={() => selectRow(p.seq)}
                  onkeydown={(ev) => ev.key === "Enter" && selectRow(p.seq)}>
               <span class="absolute left-0 top-0 bottom-0 w-1"
-                    style="background-color: {sourceColor(p.source_id)}"></span>
+                    style="background-color: {sourceColor(p.source_id)}"
+                    title={sourceName(p.source_id)}></span>
               <span class="shrink-0 w-3 text-amber-600">📌</span>
               <span class="text-zinc-500 shrink-0 w-24">{fmtTs(p.ts)}</span>
               <span class={`shrink-0 w-12 ${levelClass(p.level)}`}>{(p.level ?? "").toUpperCase()}</span>
@@ -839,17 +983,23 @@
         <div
           role="button"
           tabindex="0"
-          class="logrow relative pl-4 pr-3 py-1 border-b border-zinc-100 dark:border-zinc-900 hover:bg-zinc-50 dark:hover:bg-zinc-900 cursor-pointer"
+          class="logrow relative pl-4 pr-3 border-b border-zinc-100 dark:border-zinc-900 hover:bg-zinc-50 dark:hover:bg-zinc-900 cursor-pointer"
+          class:py-0={density === "compact"}
+          class:py-1={density === "cozy"}
+          class:py-1.5={density === "comfortable"}
+          class:leading-tight={density === "compact"}
           class:bg-sky-50={selectedSeq === e.seq}
           class:dark:bg-sky-950={selectedSeq === e.seq}
           class:!bg-amber-100={selectedSet.has(e.seq)}
           class:dark:!bg-amber-950={selectedSet.has(e.seq)}
           data-seq={e.seq}
           onclick={(ev) => rowClick(ev, e.seq)}
+          oncontextmenu={(ev) => openContextMenu(ev, e)}
           onkeydown={(ev) => ev.key === "Enter" && selectRow(e.seq)}>
           <span
             class="absolute left-0 top-0 bottom-0 w-1"
-            style="background-color: {sourceColor(e.source_id)}"></span>
+            style="background-color: {sourceColor(e.source_id)}"
+            title={sourceName(e.source_id)}></span>
           <div class="flex gap-3">
             <span class="text-zinc-500 shrink-0 w-24">{fmtTs(e.ts)}</span>
             <span class={`shrink-0 w-12 ${levelClass(e.level)}`}
@@ -866,6 +1016,8 @@
               >{e.service ?? ""}</span>
             {#if e.text && e.ansi}
               <span class="flex-1 truncate">{@html ansiToHTML(e.ansi)}</span>
+            {:else if highlightRe}
+              <span class="flex-1 truncate">{@html highlightMsg(e.msg ?? "")}</span>
             {:else}
               <span class="flex-1 truncate">{e.msg ?? ""}</span>
             {/if}
@@ -910,6 +1062,26 @@
       localStorage.setItem("loggi.profile", name);
       flashToast(`saved to ${path}`);
     }} />
+{/if}
+
+{#if ctxMenu}
+  <RowContextMenu
+    entry={ctxMenu.entry}
+    sourceName={sourceName(ctxMenu.entry.source_id)}
+    pinned={pinnedSeqs.includes(ctxMenu.entry.seq)}
+    selected={selectedSet.has(ctxMenu.entry.seq)}
+    selectionSize={selectedSet.size}
+    x={ctxMenu.x}
+    y={ctxMenu.y}
+    onClose={() => (ctxMenu = null)}
+    onAddFilter={addFilterClause}
+    onTogglePin={() => togglePin(ctxMenu!.entry.seq)}
+    onCopyMsg={() => copyEntryMsg(ctxMenu!.entry)}
+    onCopyJSON={() => copyEntryJSON(ctxMenu!.entry)}
+    onSelectToggle={() => toggleSelectionFor(ctxMenu!.entry.seq)}
+    onClearSelection={clearSelection}
+    onDiff={openDiff}
+    onOpenDetail={() => selectRow(ctxMenu!.entry.seq)} />
 {/if}
 
 {#if showHelp}

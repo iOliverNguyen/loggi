@@ -11,6 +11,9 @@ export interface SessionConfig {
   theme?: "auto" | "light" | "dark";
   panel?: { seq: number };
   columns?: string[];
+  selected?: number[]; // seqs of multi-selected rows
+  highlight?: string;  // in-page highlight term
+  density?: "compact" | "cozy" | "comfortable";
 }
 
 function b64urlEncode(s: string): string {
@@ -36,6 +39,9 @@ export function encodeSession(cfg: SessionConfig): string {
   if (cfg.theme && cfg.theme !== "auto") slim.theme = cfg.theme;
   if (cfg.panel) slim.panel = cfg.panel;
   if (cfg.columns?.length) slim.columns = cfg.columns;
+  if (cfg.selected?.length) slim.selected = cfg.selected;
+  if (cfg.highlight) slim.highlight = cfg.highlight;
+  if (cfg.density && cfg.density !== "cozy") slim.density = cfg.density;
   return b64urlEncode(JSON.stringify(slim));
 }
 

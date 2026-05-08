@@ -6,11 +6,13 @@
 
   const SHORTCUTS: { keys: string[]; label: string }[] = [
     { keys: ["/"], label: "focus filter" },
+    { keys: ["⌘F"], label: "highlight substring in messages" },
     { keys: ["Esc"], label: "blur input · close panel · close overlay" },
     { keys: ["j", "k"], label: "row down / up" },
     { keys: ["g", "G"], label: "jump to top / bottom" },
     { keys: ["Enter"], label: "open detail panel" },
     { keys: ["Space"], label: "pause / resume" },
+    { keys: ["right-click"], label: "row context menu" },
     { keys: ["⌘L"], label: "copy share URL" },
     { keys: ["⌘C"], label: "copy selected rows as JSONL" },
     { keys: ["p"], label: "pin / unpin row" },
