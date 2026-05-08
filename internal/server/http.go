@@ -53,6 +53,10 @@ func (s *Server) serveHTTP(l net.Listener) {
 	mux.HandleFunc("/api/health", s.handleAPIHealth)
 	mux.HandleFunc("/api/columns", s.handleAPIColumns)
 	mux.HandleFunc("/api/histogram", s.handleAPIHistogram)
+	if s.opts.Debug {
+		mux.HandleFunc("/api/debug/filter", s.handleAPIDebugFilter)
+		s.logger.Printf("debug endpoints enabled: /api/debug/filter")
+	}
 	if s.opts.StaticFS != nil {
 		mux.Handle("/", s.opts.StaticFS)
 	} else {

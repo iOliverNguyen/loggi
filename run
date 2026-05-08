@@ -69,6 +69,13 @@ run-server() {
   exec "$PROJECT_ROOT/loggi" server
 }
 
+run-server-debug() {
+  usage-prompt "./run server-debug — start the loggi daemon with /api/debug/* enabled" "$1"
+  run-build
+  p-info "starting loggi server (Ctrl-C to stop) [debug endpoints ON]"
+  exec "$PROJECT_ROOT/loggi" server --debug
+}
+
 run-stop() {
   usage-prompt "./run stop — stop a running loggi daemon" "$1"
   if [ ! -x "$PROJECT_ROOT/loggi" ]; then

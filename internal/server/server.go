@@ -45,6 +45,10 @@ type Options struct {
 	// Empty if the server wasn't started inside a repo. Used to resolve the
 	// "repo" save destination for /api/profiles.
 	RepoRoot string
+	// Debug enables /api/debug/* endpoints. Off in production; turn on
+	// with `loggi server --debug` (or `./run server-debug`) to inspect
+	// filter/store state at runtime.
+	Debug bool
 }
 
 // ProfileInfo is the wire representation of a config profile.

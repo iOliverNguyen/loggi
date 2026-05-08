@@ -18,14 +18,16 @@ import (
 // NewServerCmd is `loggi server [--daemon] | server stop | server status`.
 func NewServerCmd() *cobra.Command {
 	var daemon bool
+	var debug bool
 	cmd := &cobra.Command{
 		Use:   "server",
 		Short: "Run the loggi server (foreground or detached)",
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return runServer(daemon)
+			return runServer(daemon, debug)
 		},
 	}
 	cmd.Flags().BoolVar(&daemon, "daemon", false, "detach and write a pidfile")
+	cmd.Flags().BoolVar(&debug, "debug", false, "enable /api/debug/* endpoints for runtime introspection")
 
 	cmd.AddCommand(&cobra.Command{
 		Use:   "stop",
@@ -44,7 +46,7 @@ func NewServerCmd() *cobra.Command {
 	return cmd
 }
 
-func runServer(_ bool) error {
+func runServer(_ bool, debug bool) error {
 	loaded, err := config.Load(mustGetwd())
 	if err != nil {
 		return err
@@ -77,6 +79,7 @@ func runServer(_ bool) error {
 		DefaultProfile: cfg.UI.DefaultProfile,
 		DockerTail:     cfg.Sources.Defaults.DockerTail,
 		RepoRoot:       config.FindRepoRoot(mustGetwd()),
+		Debug:          debug,
 	})
 	if err := srv.Start(); err != nil {
 		return err
