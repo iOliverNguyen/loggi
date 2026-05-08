@@ -27,8 +27,12 @@ type Sources struct {
 }
 
 type SourceDefaults struct {
-	FilePollMS  int    `toml:"file_poll_ms"`
-	DockerSince string `toml:"docker_since"`
+	FilePollMS int `toml:"file_poll_ms"`
+	// DockerTail is the number of historical log lines pulled from the
+	// Docker engine when a container source is added. The client only
+	// renders the most recent ~300; the rest become available via the
+	// scroll-back history RPC. Default: 1000.
+	DockerTail int `toml:"docker_tail"`
 }
 
 type Profile struct {
@@ -60,8 +64,8 @@ func Defaults() Config {
 		},
 		Sources: Sources{
 			Defaults: SourceDefaults{
-				FilePollMS:  50,
-				DockerSince: "10m",
+				FilePollMS: 50,
+				DockerTail: 1000,
 			},
 		},
 		Profiles: []Profile{

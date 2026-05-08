@@ -6,7 +6,7 @@
   type IconName =
     | "play" | "pause" | "trash" | "save" | "share" | "download"
     | "settings" | "sun" | "moon" | "monitor" | "help" | "search"
-    | "filter" | "columns" | "pin" | "plus" | "minus" | "x"
+    | "filter" | "columns" | "rows" | "pin" | "plus" | "minus" | "x"
     | "refresh" | "copy" | "edit" | "check" | "chevron-down"
     | "chevron-right" | "star" | "star-filled" | "diff" | "link";
 
@@ -31,6 +31,7 @@
     search: "M11 19a8 8 0 100-16 8 8 0 000 16zM21 21l-4.35-4.35",
     filter: "M22 3H2l8 9.46V19l4 2v-8.54L22 3z",
     columns: "M9 3v18M3 3h18v18H3z",
+    rows: "M3 6h18M3 12h18M3 18h18",
     pin: "M12 2v8M5 11h14l-2 9H7l-2-9zM12 11v11",
     plus: "M12 5v14M5 12h14",
     minus: "M5 12h14",

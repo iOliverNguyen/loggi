@@ -75,6 +75,7 @@ func runServer(_ bool) error {
 		Profiles:       profiles,
 		Theme:          cfg.UI.Theme,
 		DefaultProfile: cfg.UI.DefaultProfile,
+		DockerTail:     cfg.Sources.Defaults.DockerTail,
 		RepoRoot:       config.FindRepoRoot(mustGetwd()),
 	})
 	if err := srv.Start(); err != nil {

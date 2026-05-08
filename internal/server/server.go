@@ -37,6 +37,10 @@ type Options struct {
 	Profiles       []ProfileInfo
 	Theme          string
 	DefaultProfile string
+	// DockerTail is the number of historical log lines requested from
+	// the Docker engine when a container source is added. 0 falls back
+	// to the docker package's default (1000).
+	DockerTail int
 	// RepoRoot is the detected repo root (.git/go.mod) at server-start cwd.
 	// Empty if the server wasn't started inside a repo. Used to resolve the
 	// "repo" save destination for /api/profiles.
@@ -246,14 +250,15 @@ func (s *Server) AddStdinSource(name string) (uint64, *stdinSource, error) {
 
 // AddDockerSource adds a docker container source. Idempotent on container
 // name: re-clicking "Add" returns the existing id without spawning a parallel
-// tail. Initial backfill is fixed at 300 lines from the engine; older entries
-// flow through the store ring buffer via the History RPC.
+// tail. Initial backfill is Options.DockerTail lines from the engine
+// (default 1000); the client typically renders only the most recent ~300
+// and pages older entries through the History RPC.
 func (s *Server) AddDockerSource(name string) (uint64, error) {
 	if id, ok := s.findOpenSource(source.KindDocker, name); ok {
 		return id, nil
 	}
 	id := s.srcGen.Next()
-	src, err := newDockerSource(id, name)
+	src, err := newDockerSource(id, name, s.opts.DockerTail)
 	if err != nil {
 		return 0, err
 	}

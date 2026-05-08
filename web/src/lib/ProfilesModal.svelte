@@ -37,6 +37,18 @@
     mode = "edit";
     error = "";
   }
+  // Duplicate: open the new-profile editor pre-filled with the source
+  // profile's filter and a derived name. originalName stays empty so
+  // the save path doesn't try to delete the source.
+  function startDuplicate(p: Profile) {
+    const existing = new Set(profiles.map((x: Profile) => x.name));
+    let candidate = `${p.name} (copy)`;
+    let n = 2;
+    while (existing.has(candidate)) candidate = `${p.name} (copy ${n++})`;
+    editing = { originalName: "", name: candidate, filter: p.filter ?? "", dest: "user" };
+    mode = "new";
+    error = "";
+  }
   function cancelEdit() {
     editing = null;
     mode = "list";
@@ -156,6 +168,12 @@
                 </button>
                 <button
                   class="opacity-0 group-hover:opacity-100 text-zinc-500 hover:text-sky-600 p-1"
+                  onclick={() => startDuplicate(p)}
+                  title="duplicate">
+                  <Icon name="copy" size={14} />
+                </button>
+                <button
+                  class="opacity-0 group-hover:opacity-100 text-zinc-500 hover:text-sky-600 p-1"
                   onclick={() => startEdit(p)}
                   title="edit">
                   <Icon name="edit" size={14} />
@@ -174,12 +192,25 @@
           <div class="text-red-500 text-xs mt-3">⚠ {error}</div>
         {/if}
       </div>
-      <footer class="px-4 py-2.5 border-t border-zinc-200 dark:border-zinc-800 flex justify-end">
-        <button
-          class="px-3 py-1.5 rounded bg-sky-600 text-white text-xs hover:bg-sky-700 inline-flex items-center gap-1.5"
-          onclick={startNew}>
-          <Icon name="plus" size={14} /> New profile
-        </button>
+      <footer class="px-4 py-2.5 border-t border-zinc-200 dark:border-zinc-800 flex justify-between items-center gap-2">
+        <span class="text-[11px] text-zinc-500 truncate" title={currentFilter}>
+          {currentFilter ? `current: ${currentFilter}` : "current filter is empty"}
+        </span>
+        <div class="flex gap-2 shrink-0">
+          {#if currentFilter.trim()}
+            <button
+              class="px-3 py-1.5 rounded bg-zinc-200 dark:bg-zinc-800 text-xs inline-flex items-center gap-1.5 hover:bg-zinc-300 dark:hover:bg-zinc-700"
+              onclick={startNew}
+              title="Save the current filter as a new profile">
+              <Icon name="save" size={14} /> Save current as new
+            </button>
+          {/if}
+          <button
+            class="px-3 py-1.5 rounded bg-sky-600 text-white text-xs hover:bg-sky-700 inline-flex items-center gap-1.5"
+            onclick={() => { editing = { originalName: "", name: "", filter: "", dest: "user" }; mode = "new"; error = ""; }}>
+            <Icon name="plus" size={14} /> New profile
+          </button>
+        </div>
       </footer>
     {:else if editing}
       <div class="flex-1 overflow-y-auto px-4 py-3 space-y-3">

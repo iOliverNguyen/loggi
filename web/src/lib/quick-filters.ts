@@ -37,20 +37,27 @@ export function persistQuickChips(chips: QuickChip[]): void {
   window.dispatchEvent(new CustomEvent(QUICK_CHANGED));
 }
 
-// saveCurrentAsQuick prompts for a label and writes a chip with the
-// given expression. Returns true on success.
-export function saveCurrentAsQuick(currentFilter: string): boolean {
-  const expr = currentFilter.trim();
-  const label = window.prompt(`Name this quick filter${expr ? "" : " (saving empty filter)"}:`);
-  if (!label) return false;
+// QUICK_PROMPT is dispatched on `window` to open the save-as-quick
+// dialog. The detail carries the expression to be saved.
+export const QUICK_PROMPT = "loggi:save-quick-prompt";
+
+// requestSaveQuick asks the host page to open a save dialog. The
+// actual persistence happens through commitQuickChip once the user
+// confirms.
+export function requestSaveQuick(expr: string): void {
+  window.dispatchEvent(new CustomEvent(QUICK_PROMPT, { detail: { expr } }));
+}
+
+// commitQuickChip writes a chip; called by the save dialog after the
+// user picks a label. Returns whether an existing chip was replaced.
+export function commitQuickChip(label: string, expr: string): { ok: boolean; replaced: boolean } {
   const trimmed = label.trim();
-  if (!trimmed) return false;
+  if (!trimmed) return { ok: false, replaced: false };
   const chips = loadQuickChips();
   if (chips.some((c) => c.label === trimmed)) {
-    if (!window.confirm(`Replace existing "${trimmed}"?`)) return false;
     persistQuickChips(chips.map((c) => (c.label === trimmed ? { label: trimmed, expr } : c)));
-  } else {
-    persistQuickChips([...chips, { label: trimmed, expr }]);
+    return { ok: true, replaced: true };
   }
-  return true;
+  persistQuickChips([...chips, { label: trimmed, expr }]);
+  return { ok: true, replaced: false };
 }

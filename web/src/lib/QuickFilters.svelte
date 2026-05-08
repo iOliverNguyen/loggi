@@ -5,7 +5,7 @@
     QUICK_CHANGED,
     loadQuickChips,
     persistQuickChips,
-    saveCurrentAsQuick,
+    requestSaveQuick,
   } from "./quick-filters";
 
   let { activeFilter, currentFilter, onApply } = $props<{
@@ -35,7 +35,7 @@
   }
 
   function saveCurrent() {
-    if (saveCurrentAsQuick(currentFilter)) chips = loadQuickChips();
+    requestSaveQuick(currentFilter);
   }
 
   function remove(label: string) {
@@ -43,41 +43,54 @@
     chips = loadQuickChips();
   }
 
-  // Measure visible chips: hide chips that overflow the container width and
-  // expose the rest under a dropdown. We measure on mount and on resize.
+  // Measure all chips: every chip renders into listEl regardless of cap;
+  // chips beyond visibleCount carry a `chip-hidden` class that simply
+  // hides them visually without removing them from the DOM. This keeps
+  // their natural width measurable on every pass, so the cap can both
+  // shrink (on resize) and grow (when chips are added or removed).
   function measure() {
     if (!listEl || !containerEl) return;
     const containerW = containerEl.clientWidth;
     // Reserve space for the leading label and trailing buttons (~150px).
     const budget = Math.max(0, containerW - 220);
+    const items = Array.from(listEl.children) as HTMLElement[];
     let used = 0;
     let count = 0;
-    const items = Array.from(listEl.children) as HTMLElement[];
     for (const el of items) {
-      // Temporarily ensure visibility for measurement.
-      const w = el.scrollWidth + 6; // gap
+      // Read offsetWidth from the chip's wrapper so the per-chip ×
+      // remove badge doesn't affect the count. Hidden chips temporarily
+      // un-hide themselves via the `.measuring` class on the parent.
+      const w = el.offsetWidth + 6; // gap
       if (used + w > budget && count > 0) break;
       used += w;
       count++;
     }
-    visibleCount = Math.max(1, count);
+    visibleCount = Math.max(1, Math.min(count, items.length));
+  }
+
+  function measureWithReveal() {
+    if (!listEl) return;
+    listEl.classList.add("measuring");
+    // Force reflow so offsetWidth reads include the un-hidden chips.
+    void listEl.offsetWidth;
+    measure();
+    listEl.classList.remove("measuring");
   }
 
   $effect(() => {
     if (!containerEl) return;
-    const ro = new ResizeObserver(() => measure());
+    const ro = new ResizeObserver(() => measureWithReveal());
     ro.observe(containerEl);
-    measure();
+    measureWithReveal();
     return () => ro.disconnect();
   });
 
   // Re-measure when chips list changes.
   $effect(() => {
     void chips.length;
-    queueMicrotask(measure);
+    queueMicrotask(measureWithReveal);
   });
 
-  let visible = $derived(chips.slice(0, visibleCount));
   let overflow = $derived(chips.slice(visibleCount));
 </script>
 
@@ -98,9 +111,11 @@
     }
   }}>
   <span class="text-zinc-500 shrink-0">Quick:</span>
-  <div bind:this={listEl} class="flex items-center gap-1.5 min-w-0 flex-1 overflow-hidden">
-    {#each visible as c, i (c.label)}
-      <span class="group relative inline-flex items-center">
+  <div bind:this={listEl} class="quick-list flex items-center gap-1.5 min-w-0 flex-1 overflow-hidden">
+    {#each chips as c, i (c.label)}
+      <span
+        class="chip-wrap group relative inline-flex items-center"
+        class:chip-hidden={i >= visibleCount}>
         <button
           data-chip
           class="px-2 py-0.5 rounded text-[11px] mono whitespace-nowrap transition-colors"
@@ -162,3 +177,17 @@
     <Icon name="plus" size={12} /> save
   </button>
 </div>
+
+<style>
+  /* Chips beyond the measured visibleCount are hidden visually but stay
+     in layout long enough to be measured. The .measuring helper class
+     temporarily reveals them so a ResizeObserver pass can compute the
+     true cap. */
+  .chip-hidden {
+    display: none;
+  }
+  .quick-list.measuring .chip-hidden {
+    display: inline-flex;
+    visibility: hidden;
+  }
+</style>

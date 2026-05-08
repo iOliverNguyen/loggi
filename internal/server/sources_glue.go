@@ -17,6 +17,6 @@ type stdinSource = stdinsrc.Source
 
 func newStdinSource(id uint64, name string) *stdinSource { return stdinsrc.New(id, name) }
 
-func newDockerSource(id uint64, name string) (source.Source, error) {
-	return dockersrc.New(id, name)
+func newDockerSource(id uint64, name string, tail int) (source.Source, error) {
+	return dockersrc.New(id, name, tail)
 }

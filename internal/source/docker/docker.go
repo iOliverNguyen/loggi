@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"strconv"
 	"sync/atomic"
 
 	"github.com/docker/docker/api/types/container"
@@ -18,16 +19,20 @@ import (
 type Source struct {
 	id        uint64
 	container string
+	tail      int // historical lines requested from the engine
 	cli       *dclient.Client
 	closed    atomic.Bool
 }
 
-func New(id uint64, containerName string) (*Source, error) {
+func New(id uint64, containerName string, tail int) (*Source, error) {
 	cli, err := dclient.NewClientWithOpts(dclient.FromEnv, dclient.WithAPIVersionNegotiation())
 	if err != nil {
 		return nil, err
 	}
-	return &Source{id: id, container: containerName, cli: cli}, nil
+	if tail <= 0 {
+		tail = 1000
+	}
+	return &Source{id: id, container: containerName, tail: tail, cli: cli}, nil
 }
 
 func (s *Source) ID() uint64        { return s.id }
@@ -50,7 +55,7 @@ func (s *Source) Run(ctx context.Context, out chan<- source.RawLine) error {
 		ShowStdout: true,
 		ShowStderr: true,
 		Follow:     true,
-		Tail:       "300",
+		Tail:       strconv.Itoa(s.tail),
 		Timestamps: false,
 	})
 	if err != nil {

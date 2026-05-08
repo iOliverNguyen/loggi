@@ -17,7 +17,9 @@
   import RowContextMenu from "./lib/RowContextMenu.svelte";
   import Combobox from "./lib/Combobox.svelte";
   import FilterAutocomplete from "./lib/FilterAutocomplete.svelte";
-  import { saveCurrentAsQuick } from "./lib/quick-filters";
+  import SaveQuickModal from "./lib/SaveQuickModal.svelte";
+  import SettingsModal from "./lib/SettingsModal.svelte";
+  import { requestSaveQuick, QUICK_PROMPT, persistQuickChips, DEFAULT_CHIPS } from "./lib/quick-filters";
   import {
     readSessionFromHash,
     clearAddress,
@@ -513,6 +515,25 @@
   let filterInputEl: HTMLInputElement | null = $state(null);
   let showHelp = $state(false);
   let helpInitialTab = $state<"keys" | "syntax" | "examples" | undefined>(undefined);
+  let showSaveQuick = $state(false);
+  let saveQuickExpr = $state("");
+  let showSettings = $state(false);
+
+  // Display toggles persisted across sessions.
+  let showQuickBar = $state((localStorage.getItem("loggi.showQuickBar") ?? "1") !== "0");
+  let showTimestamps = $state((localStorage.getItem("loggi.showTs") ?? "1") !== "0");
+  $effect(() => { try { localStorage.setItem("loggi.showQuickBar", showQuickBar ? "1" : "0"); } catch {} });
+  $effect(() => { try { localStorage.setItem("loggi.showTs", showTimestamps ? "1" : "0"); } catch {} });
+
+  $effect(() => {
+    const onPrompt = (e: Event) => {
+      const detail = (e as CustomEvent<{ expr: string }>).detail;
+      saveQuickExpr = detail?.expr ?? "";
+      showSaveQuick = true;
+    };
+    window.addEventListener(QUICK_PROMPT, onPrompt);
+    return () => window.removeEventListener(QUICK_PROMPT, onPrompt);
+  });
   let showExportMenu = $state(false);
   let showProfilesModal = $state(false);
   const iconBtnCls = "p-1.5 rounded bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300";
@@ -827,7 +848,7 @@
           title="Manage profiles"
           aria-label="manage profiles"
           onclick={() => (showProfilesModal = true)}>
-          <Icon name="settings" size={14} />
+          <Icon name="edit" size={14} />
         </button>
       </div>
     {/if}
@@ -925,7 +946,14 @@
       title={`Density: ${density} (click to cycle)`}
       aria-label="cycle density"
       onclick={() => (density = density === "compact" ? "cozy" : density === "cozy" ? "comfortable" : "compact")}>
-      <Icon name="columns" size={16} />
+      <Icon name="rows" size={16} />
+    </button>
+    <button
+      class={iconBtnCls}
+      title="Settings"
+      aria-label="settings"
+      onclick={() => (showSettings = true)}>
+      <Icon name="settings" size={16} />
     </button>
     <button
       class={iconBtnCls}
@@ -968,10 +996,12 @@
     </div>
   {/if}
 
-  <QuickFilters
-    activeFilter={filter}
-    currentFilter={pendingFilter}
-    onApply={(expr) => quickLevel(expr)} />
+  {#if showQuickBar}
+    <QuickFilters
+      activeFilter={filter}
+      currentFilter={pendingFilter}
+      onApply={(expr) => quickLevel(expr)} />
+  {/if}
 
   <!-- status row: counts and notices -->
   <div class="px-4 py-1 border-b border-zinc-200 dark:border-zinc-800 flex items-center gap-2 text-[11px] text-zinc-500">
@@ -1004,7 +1034,7 @@
           helpInitialTab = "syntax";
           showHelp = true;
         }}
-        onSaveQuick={() => saveCurrentAsQuick(pendingFilter)} />
+        onSaveQuick={() => requestSaveQuick(pendingFilter)} />
       <div class="border-t border-zinc-200 dark:border-zinc-800 my-3"></div>
 
       <div class="flex items-center justify-between mb-2">
@@ -1074,7 +1104,7 @@
                     style="background-color: {sourceColor(p.source_id)}"
                     title={sourceName(p.source_id)}></span>
               <span class="shrink-0 w-3 text-amber-600">📌</span>
-              <span class="text-zinc-500 shrink-0 w-24">{fmtTs(p.ts)}</span>
+              {#if showTimestamps}<span class="text-zinc-500 shrink-0 w-24">{fmtTs(p.ts)}</span>{/if}
               <span class={`shrink-0 w-12 ${levelClass(p.level)}`}>{(p.level ?? "").toUpperCase()}</span>
               <span class="shrink-0 w-24 truncate text-zinc-500 text-[11px]">{sourceName(p.source_id)}</span>
               <span class="shrink-0 w-32 truncate text-zinc-600 dark:text-zinc-400">{p.service ?? ""}</span>
@@ -1118,7 +1148,7 @@
             style="background-color: {sourceColor(e.source_id)}"
             title={sourceName(e.source_id)}></span>
           <div class="flex gap-3">
-            <span class="text-zinc-500 shrink-0 w-24">{fmtTs(e.ts)}</span>
+            {#if showTimestamps}<span class="text-zinc-500 shrink-0 w-24">{fmtTs(e.ts)}</span>{/if}
             <span class={`shrink-0 w-12 ${levelClass(e.level)}`}
               >{(e.level ?? "").toUpperCase()}</span>
             <button
@@ -1208,6 +1238,39 @@
       showHelp = false;
       helpInitialTab = undefined;
     }} />
+{/if}
+
+{#if showSaveQuick}
+  <SaveQuickModal
+    expr={saveQuickExpr}
+    onClose={() => (showSaveQuick = false)} />
+{/if}
+
+{#if showSettings}
+  <SettingsModal
+    {theme}
+    {density}
+    {showQuickBar}
+    {showTimestamps}
+    onChangeTheme={(t) => (theme = t)}
+    onChangeDensity={(d) => (density = d)}
+    onChangeShowQuickBar={(v) => (showQuickBar = v)}
+    onChangeShowTimestamps={(v) => (showTimestamps = v)}
+    onClearHistory={() => {
+      filterHistory = [];
+      try { localStorage.removeItem("loggi.filterHistory"); } catch {}
+    }}
+    onClearQuickChips={() => persistQuickChips(DEFAULT_CHIPS)}
+    onClearLocal={() => {
+      try {
+        for (const k of Object.keys(localStorage)) {
+          if (k.startsWith("loggi.")) localStorage.removeItem(k);
+        }
+      } catch {}
+      window.location.reload();
+    }}
+    onOpenProfiles={() => { showSettings = false; showProfilesModal = true; }}
+    onClose={() => (showSettings = false)} />
 {/if}
 
 {#if showProfilesModal}
