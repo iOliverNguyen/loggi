@@ -69,17 +69,21 @@ func runServer(_ bool, debug bool) error {
 		})
 	}
 	srv := server.NewServer(server.Options{
-		SocketPath:     config.SocketPath(),
-		HTTPBind:       cfg.Server.HTTPBind,
-		IdleTimeout:    idle,
-		StoreCap:       uint64(cfg.Server.RingBuffer),
-		StaticFS:       embeddedSPA(),
-		Profiles:       profiles,
-		Theme:          cfg.UI.Theme,
-		DefaultProfile: cfg.UI.DefaultProfile,
-		DockerTail:     cfg.Sources.Defaults.DockerTail,
-		RepoRoot:       config.FindRepoRoot(mustGetwd()),
-		Debug:          debug,
+		SocketPath:      config.SocketPath(),
+		HTTPBind:        cfg.Server.HTTPBind,
+		IdleTimeout:     idle,
+		StoreCap:        uint64(cfg.Server.RingBuffer),
+		StaticFS:        embeddedSPA(),
+		Profiles:        profiles,
+		Theme:           cfg.UI.Theme,
+		Density:         cfg.UI.Density,
+		DefaultProfile:  cfg.UI.DefaultProfile,
+		TimestampFormat: cfg.UI.TimestampFormat,
+		DockerTail:      cfg.Sources.Defaults.DockerTail,
+		FilePollMS:      cfg.Sources.Defaults.FilePollMS,
+		Autostart:       cfg.Sources.Autostart,
+		RepoRoot:        config.FindRepoRoot(mustGetwd()),
+		Debug:           debug,
 	})
 	if err := srv.Start(); err != nil {
 		return err

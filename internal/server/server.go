@@ -29,19 +29,25 @@ const DefaultHTTPBind = "127.0.0.1:9199"
 
 // Options configures a Server.
 type Options struct {
-	SocketPath     string
-	HTTPBind       string // e.g. "127.0.0.1:9199" — empty means default to DefaultHTTPBind
-	IdleTimeout    time.Duration
-	StoreCap       uint64
-	Logger         *log.Logger
-	StaticFS       http.Handler // embedded SPA handler; nil = serve a placeholder
-	Profiles       []ProfileInfo
-	Theme          string
-	DefaultProfile string
+	SocketPath      string
+	HTTPBind        string // e.g. "127.0.0.1:9199" — empty means default to DefaultHTTPBind
+	IdleTimeout     time.Duration
+	StoreCap        uint64
+	Logger          *log.Logger
+	StaticFS        http.Handler // embedded SPA handler; nil = serve a placeholder
+	Profiles        []ProfileInfo
+	Theme           string
+	Density         string // round-tripped only; "compact" | "cozy" | "comfortable"
+	DefaultProfile  string
+	TimestampFormat string
 	// DockerTail is the number of historical log lines requested from
 	// the Docker engine when a container source is added. 0 falls back
 	// to the docker package's default (1000).
 	DockerTail int
+	FilePollMS int
+	// Autostart is the global Sources.Autostart list. Applied once during
+	// Start(); failures log and continue (don't block server startup).
+	Autostart []config.SourceRef
 	// RepoRoot is the detected repo root (.git/go.mod) at server-start cwd.
 	// Empty if the server wasn't started inside a repo. Used to resolve the
 	// "repo" save destination for /api/profiles.
@@ -156,6 +162,12 @@ func NewServer(opts Options) *Server {
 		cancel:   cancel,
 		sessions: make(map[uint64]*session),
 	}
+	// Cap is rounded up to the next power of two by store.New. Surface the
+	// rounded value when it differs so operators don't silently get more
+	// memory than they configured.
+	if eff := srv.store.Cap(); eff != opts.StoreCap {
+		opts.Logger.Printf("store: ring_buffer rounded %d -> %d (next power of two)", opts.StoreCap, eff)
+	}
 	srv.store.SetSourceNameLookup(func(id uint64) string {
 		srv.srcMu.RLock()
 		defer srv.srcMu.RUnlock()
@@ -209,8 +221,43 @@ func (s *Server) Start() error {
 	go s.ingester()
 	go s.tickStats()
 
+	s.applyAutostart()
 	s.startIdleTimer()
 	return nil
+}
+
+// applyAutostart launches each Sources.Autostart entry. Failures log and
+// continue so a stale config (e.g. removed file path, container that no
+// longer exists) doesn't prevent the server from coming up.
+func (s *Server) applyAutostart() {
+	for _, ref := range s.opts.Autostart {
+		if _, err := s.startAutostartRef(ref); err != nil {
+			s.logger.Printf("autostart skip %s/%s: %v", ref.Kind, ref.Name, err)
+		}
+	}
+}
+
+// startAutostartRef dispatches one SourceRef to the matching AddXxxSource.
+// Stdin is intentionally rejected — it can't be replayed at boot.
+func (s *Server) startAutostartRef(ref config.SourceRef) (uint64, error) {
+	switch ref.Kind {
+	case "file":
+		path := ref.Name
+		if v, ok := ref.Args["path"].(string); ok && v != "" {
+			path = v
+		}
+		if path == "" {
+			return 0, fmt.Errorf("missing path")
+		}
+		return s.AddFileSource(path)
+	case "docker":
+		if ref.Name == "" {
+			return 0, fmt.Errorf("missing container name")
+		}
+		return s.AddDockerSource(ref.Name)
+	default:
+		return 0, fmt.Errorf("unsupported kind %q", ref.Kind)
+	}
 }
 
 // tickStats walks active sources every second and updates each one's

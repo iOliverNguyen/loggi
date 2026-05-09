@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -48,6 +49,7 @@ func (s *Server) serveHTTP(l net.Listener) {
 	mux.HandleFunc("/api/sources", s.handleAPISources)
 	mux.HandleFunc("/api/profiles", s.handleAPIProfiles)
 	mux.HandleFunc("/api/config", s.handleAPIConfig)
+	mux.HandleFunc("/api/config/autostart", s.handleAPIAutostart)
 	mux.HandleFunc("/api/docker/containers", s.handleAPIDockerContainers)
 	mux.HandleFunc("/api/export", s.handleAPIExport)
 	mux.HandleFunc("/api/health", s.handleAPIHealth)
@@ -55,7 +57,8 @@ func (s *Server) serveHTTP(l net.Listener) {
 	mux.HandleFunc("/api/histogram", s.handleAPIHistogram)
 	if s.opts.Debug {
 		mux.HandleFunc("/api/debug/filter", s.handleAPIDebugFilter)
-		s.logger.Printf("debug endpoints enabled: /api/debug/filter")
+		mux.HandleFunc("/api/debug/store", s.handleAPIDebugStore)
+		s.logger.Printf("debug endpoints enabled: /api/debug/filter, /api/debug/store")
 	}
 	if s.opts.StaticFS != nil {
 		mux.Handle("/", s.opts.StaticFS)
@@ -91,11 +94,12 @@ func (s *Server) handleAPIProfiles(w http.ResponseWriter, r *http.Request) {
 }
 
 type saveProfileReq struct {
-	Name            string   `json:"name"`
-	Filter          string   `json:"filter"`
-	Columns         []string `json:"columns"`
-	CollapsedFields []string `json:"collapsed_fields"`
-	Destination     string   `json:"destination"` // "user" | "repo"
+	Name            string             `json:"name"`
+	Filter          string             `json:"filter"`
+	Columns         []string           `json:"columns"`
+	CollapsedFields []string           `json:"collapsed_fields"`
+	Sources         []config.SourceRef `json:"sources,omitempty"`
+	Destination     string             `json:"destination"` // "user" | "repo"
 }
 
 func (s *Server) handleProfileSave(w http.ResponseWriter, r *http.Request) {
@@ -117,6 +121,7 @@ func (s *Server) handleProfileSave(w http.ResponseWriter, r *http.Request) {
 		Filter:          req.Filter,
 		Columns:         req.Columns,
 		CollapsedFields: req.CollapsedFields,
+		Sources:         req.Sources,
 	}
 	path, err := config.SaveProfile(prof, dest, s.opts.RepoRoot)
 	if err != nil {
@@ -177,12 +182,133 @@ func (s *Server) removeProfile(name string) {
 	s.opts.Profiles = out
 }
 
-func (s *Server) handleAPIConfig(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleAPIConfig(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		s.handleAPIConfigGet(w, r)
+	case http.MethodPost:
+		s.handleAPIConfigPost(w, r)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleAPIConfigGet(w http.ResponseWriter, _ *http.Request) {
+	// Read autostart from disk so the response reflects what's persisted,
+	// not just what the server happened to apply at boot. Best-effort —
+	// missing file → empty list.
+	user, _ := config.LoadUser()
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"theme":           s.opts.Theme,
-		"default_profile": s.opts.DefaultProfile,
+		"theme":            s.opts.Theme,
+		"density":          s.opts.Density,
+		"default_profile":  s.opts.DefaultProfile,
+		"timestamp_format": s.opts.TimestampFormat,
+		"source_defaults": map[string]any{
+			"file_poll_ms": s.opts.FilePollMS,
+			"docker_tail":  s.opts.DockerTail,
+		},
+		"server": map[string]any{
+			"idle_timeout": s.opts.IdleTimeout.String(),
+			"ring_buffer":  s.store.Cap(),
+			"http_bind":    s.opts.HTTPBind,
+		},
+		"autostart": user.Sources.Autostart,
 	})
+}
+
+// configPatch is the editable subset of /api/config. Pointers distinguish
+// "set to empty string" (clear) from "leave unchanged" (omit).
+type configPatch struct {
+	Theme           *string `json:"theme,omitempty"`
+	Density         *string `json:"density,omitempty"`
+	DefaultProfile  *string `json:"default_profile,omitempty"`
+	TimestampFormat *string `json:"timestamp_format,omitempty"`
+	SourceDefaults  *struct {
+		FilePollMS *int `json:"file_poll_ms,omitempty"`
+		DockerTail *int `json:"docker_tail,omitempty"`
+	} `json:"source_defaults,omitempty"`
+}
+
+func (s *Server) handleAPIConfigPost(w http.ResponseWriter, r *http.Request) {
+	// Decode strict so unknown keys 400 — caller must know the schema.
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	var p configPatch
+	if err := dec.Decode(&p); err != nil {
+		http.Error(w, "invalid JSON body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	user, err := config.LoadUser()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if p.Theme != nil {
+		user.UI.Theme = *p.Theme
+		s.opts.Theme = *p.Theme
+	}
+	if p.Density != nil {
+		user.UI.Density = *p.Density
+		s.opts.Density = *p.Density
+	}
+	if p.DefaultProfile != nil {
+		user.UI.DefaultProfile = *p.DefaultProfile
+		s.opts.DefaultProfile = *p.DefaultProfile
+	}
+	if p.TimestampFormat != nil {
+		user.UI.TimestampFormat = *p.TimestampFormat
+		s.opts.TimestampFormat = *p.TimestampFormat
+	}
+	if p.SourceDefaults != nil {
+		if p.SourceDefaults.FilePollMS != nil {
+			user.Sources.Defaults.FilePollMS = *p.SourceDefaults.FilePollMS
+			s.opts.FilePollMS = *p.SourceDefaults.FilePollMS
+		}
+		if p.SourceDefaults.DockerTail != nil {
+			user.Sources.Defaults.DockerTail = *p.SourceDefaults.DockerTail
+			s.opts.DockerTail = *p.SourceDefaults.DockerTail
+		}
+	}
+	if err := config.SaveUser(user); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+}
+
+// handleAPIAutostart persists the global Sources.Autostart list. Replaces
+// the entire list (a UI showing the current list is the source of truth).
+// Kept on a separate code path from /api/config to limit blast radius if a
+// buggy save corrupts one or the other.
+func (s *Server) handleAPIAutostart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		Autostart []config.SourceRef `json:"autostart"`
+	}
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&body); err != nil {
+		http.Error(w, "invalid JSON body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	user, err := config.LoadUser()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	user.Sources.Autostart = body.Autostart
+	if err := config.SaveUser(user); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
 }
 
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
@@ -197,9 +323,55 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	s.runSession(r.Context(), conn)
 }
 
-func (s *Server) handleAPISources(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleAPISources(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(s.Sources())
+	case http.MethodPost:
+		s.handleSourceAdd(w, r)
+	case http.MethodDelete:
+		s.handleSourceRemove(w, r)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleSourceAdd(w http.ResponseWriter, r *http.Request) {
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	var ref config.SourceRef
+	if err := dec.Decode(&ref); err != nil {
+		http.Error(w, "invalid JSON body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	id, err := s.startAutostartRef(ref)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	s.broadcastSourceState(id, "open", "")
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(s.Sources())
+	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "id": id})
+}
+
+func (s *Server) handleSourceRemove(w http.ResponseWriter, r *http.Request) {
+	idStr := r.URL.Query().Get("id")
+	if idStr == "" {
+		http.Error(w, "id query param required", http.StatusBadRequest)
+		return
+	}
+	id, err := strconv.ParseUint(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "id must be a uint64", http.StatusBadRequest)
+		return
+	}
+	if err := s.RemoveSource(id); err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
 }
 
 // handleAPIColumns returns the names of currently-promoted hot columns. The
@@ -269,7 +441,7 @@ a{color:#7aa9ff;}
 <p>Server is running. The Svelte UI bundle hasn't been built yet.</p>
 <p>Build it with <code>cd web && pnpm install && pnpm run build</code> and then restart loggi.</p>
 <p>WebSocket endpoint: <code>/ws</code></p>
-<p>Sources API: <a href="/api/sources">/api/sources</a></p>
+<p>API: <a href="/api/sources">/api/sources</a> · <a href="/api/profiles">/api/profiles</a> · <a href="/api/config">/api/config</a></p>
 </body></html>`
 
 func placeholder(w http.ResponseWriter, r *http.Request) {

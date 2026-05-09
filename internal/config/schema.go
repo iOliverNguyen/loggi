@@ -12,18 +12,30 @@ type Config struct {
 type Server struct {
 	IdleTimeout string `toml:"idle_timeout"` // duration string, default "5m"
 	RingBuffer  int    `toml:"ring_buffer"`  // entries, default 524288
-	RingBytes   string `toml:"ring_bytes"`   // size string, default "256MB"
 	HTTPBind    string `toml:"http_bind"`    // default "127.0.0.1:9199"
 }
 
 type UI struct {
-	Theme           string `toml:"theme"`           // "auto" | "light" | "dark"
+	Theme           string `toml:"theme"`             // "auto" | "light" | "dark"
 	DefaultProfile  string `toml:"default_profile"`
 	TimestampFormat string `toml:"timestamp_format"`
+	// Density is round-tripped from the SettingsModal so it follows the
+	// user across devices. Server doesn't act on it: "compact"/"cozy"/"comfortable".
+	Density string `toml:"density,omitempty"`
 }
 
 type Sources struct {
-	Defaults SourceDefaults `toml:"defaults"`
+	Defaults  SourceDefaults `toml:"defaults"`
+	Autostart []SourceRef    `toml:"autostart,omitempty"`
+}
+
+// SourceRef identifies a log source to start: a kind ("file" | "docker"),
+// the source-specific name (file path / container name), and any
+// kind-specific args. Used by Sources.Autostart and Profile.Sources.
+type SourceRef struct {
+	Kind string         `toml:"kind"`
+	Name string         `toml:"name"`
+	Args map[string]any `toml:"args,omitempty"`
 }
 
 type SourceDefaults struct {
@@ -40,7 +52,14 @@ type Profile struct {
 	Filter          string        `toml:"filter"`
 	Columns         []string      `toml:"columns"`
 	CollapsedFields []string      `toml:"collapsed_fields"`
-	SavedFilters    []SavedFilter `toml:"saved_filters"`
+	// TODO: SavedFilters is in the schema but no UI consumer reads/writes
+	// it yet. Either wire it up or drop it; left in place because tests
+	// already cover it.
+	SavedFilters []SavedFilter `toml:"saved_filters"`
+	// Sources are applied as an overlay on profile activation: refs unique
+	// to the previous profile are removed; refs unique to this profile are
+	// added. Global Sources.Autostart is unaffected by profile switches.
+	Sources []SourceRef `toml:"sources,omitempty"`
 }
 
 type SavedFilter struct {
@@ -54,7 +73,6 @@ func Defaults() Config {
 		Server: Server{
 			IdleTimeout: "5m",
 			RingBuffer:  524288,
-			RingBytes:   "256MB",
 			HTTPBind:    "127.0.0.1:9199",
 		},
 		UI: UI{

@@ -32,6 +32,30 @@
     type SessionConfig,
   } from "./lib/session-url";
 
+  // Debounce keystroke-driven side effects (localStorage writes). Each call
+  // creates an independent debouncer with a `flush()` for beforeunload.
+  const __debouncers: Array<() => void> = [];
+  function makeDebounced<A extends unknown[]>(fn: (...a: A) => void, ms = 250): ((...a: A) => void) {
+    let h: ReturnType<typeof setTimeout> | null = null;
+    let pending: A | null = null;
+    const flush = () => {
+      if (h) { clearTimeout(h); h = null; }
+      if (pending) { const a = pending; pending = null; fn(...a); }
+    };
+    __debouncers.push(flush);
+    return (...args: A) => {
+      pending = args;
+      if (h) clearTimeout(h);
+      h = setTimeout(flush, ms);
+    };
+  }
+  const persistPendingFilter = makeDebounced((v: string) => {
+    try { localStorage.setItem("loggi.pendingFilter", v); } catch {}
+  });
+  const persistHighlight = makeDebounced((v: string) => {
+    try { localStorage.setItem("loggi.highlight", v); } catch {}
+  });
+
   let bus: Bus | null = null;
   let connected = $state(false);
   let entries = $state<Entry[]>([]);
@@ -53,9 +77,7 @@
   let highlight = $state(localStorage.getItem("loggi.highlight") ?? "");
   let highlightBarOpen = $state(false);
   let highlightInputEl: HTMLInputElement | null = $state(null);
-  $effect(() => {
-    try { localStorage.setItem("loggi.highlight", highlight); } catch {}
-  });
+  $effect(() => persistHighlight(highlight));
 
   const SUB_ID = 1;
   const INITIAL_HISTORY = 300;
@@ -76,6 +98,23 @@
   let stickToBottom = $state(true);
   let historyLoading = $state(false);
   let historyExhausted = $state(false);
+
+  // Index-based row windowing. Rows are fixed height per density, so we can
+  // compute the visible slice from scrollTop without DOM measurement.
+  // Constants match the Tailwind padding classes applied to .logrow at the
+  // bottom of this file (py-0/py-1/py-1.5 + text-xs ~16px line-height).
+  const ROW_HEIGHT: Record<Density, number> = { compact: 18, cozy: 24, comfortable: 30 };
+  const OVERSCAN = 12;
+  let rowH = $derived(ROW_HEIGHT[density]);
+  let viewportH = $state(0);
+  let scrollTop = $state(0);
+  let startIndex = $derived(Math.max(0, Math.floor(scrollTop / rowH) - OVERSCAN));
+  let endIndex = $derived(
+    Math.min(entries.length, Math.ceil((scrollTop + viewportH) / rowH) + OVERSCAN),
+  );
+  let visible = $derived(entries.slice(startIndex, endIndex));
+  let topPad = $derived(startIndex * rowH);
+  let bottomPad = $derived(Math.max(0, (entries.length - endIndex) * rowH));
 
   let showAddSource = $state(false);
   let showFilters = $state(true);
@@ -102,7 +141,8 @@
     );
   }
   let highlightHits = $derived.by(() => {
-    if (!highlightRe) return 0;
+    // Skip the O(N) scan when the bar is closed — counts aren't visible.
+    if (!highlightRe || !highlightBarOpen) return 0;
     let n = 0;
     for (const e of entries) {
       const m = (e.msg ?? "").match(highlightRe);
@@ -124,12 +164,7 @@
   );
 
   $effect(() => applyTheme(theme));
-  $effect(() => {
-    // Persist mid-edit filter so a reload doesn't lose typing.
-    try {
-      localStorage.setItem("loggi.pendingFilter", pendingFilter);
-    } catch {}
-  });
+  $effect(() => persistPendingFilter(pendingFilter));
 
   onMount(async () => {
     // Apply session config from URL hash, if any, then strip the hash so the
@@ -190,6 +225,13 @@
 
   onDestroy(() => bus?.close());
 
+  // Flush any debounced localStorage writes before the page goes away.
+  $effect(() => {
+    const flush = () => { for (const f of __debouncers) f(); };
+    window.addEventListener("beforeunload", flush);
+    return () => window.removeEventListener("beforeunload", flush);
+  });
+
   function onMsg(m: any) {
     if (m.type === "snapshot") {
       // snapshot.sources is wire.SourceEvent-shaped (source_id) — normalize.
@@ -249,13 +291,15 @@
 
       if (m.batch.is_history) {
         // Older rows: append at the tail (newest-at-top ordering preserved).
-        entries = [...entries, ...fresh.reverse()];
-        if (entries.length > MAX) entries = entries.slice(entries.length - MAX);
+        // In-place mutation avoids reallocating a 50k-element array per batch.
+        entries.push(...fresh.reverse());
+        if (entries.length > MAX) entries.splice(0, entries.length - MAX);
         historyLoading = false;
         if (m.batch.end || fresh.length === 0) historyExhausted = true;
       } else {
-        // Live + initial backlog: prepend.
-        entries = [...fresh.reverse(), ...entries].slice(0, MAX);
+        // Live + initial backlog: prepend in place.
+        entries.unshift(...fresh.reverse());
+        if (entries.length > MAX) entries.length = MAX;
         if (fresh.length > 0) lastLiveAt = Date.now();
         if (stickToBottom) {
           tick().then(() => {
@@ -754,10 +798,15 @@
     if (idx === -1) next = delta > 0 ? 0 : entries.length - 1;
     next = Math.max(0, Math.min(entries.length - 1, next));
     selectedSeq = entries[next].seq;
-    // best-effort scroll into view (relies on row keyed by seq)
+    // The selected row may not be in the DOM at all (windowed rendering),
+    // so compute its position from `next * rowH` and scroll it into view.
     requestAnimationFrame(() => {
-      const row = listEl?.querySelector(`[data-seq="${selectedSeq}"]`) as HTMLElement | null;
-      row?.scrollIntoView({ block: "nearest" });
+      if (!listEl) return;
+      const top = next * rowH;
+      const bot = top + rowH;
+      if (top < listEl.scrollTop) listEl.scrollTop = top;
+      else if (bot > listEl.scrollTop + listEl.clientHeight)
+        listEl.scrollTop = bot - listEl.clientHeight;
     });
   }
   function onGlobalKey(e: KeyboardEvent) {
@@ -882,6 +931,7 @@
 
   function onScroll() {
     if (!listEl) return;
+    scrollTop = listEl.scrollTop;
     stickToBottom = listEl.scrollTop < 32;
     // Bottom of the list = oldest entry. When the user scrolls near it,
     // pull older history. Threshold is generous so the next page lands
@@ -889,6 +939,18 @@
     const distFromBottom = listEl.scrollHeight - listEl.scrollTop - listEl.clientHeight;
     if (distFromBottom < 240) requestHistory();
   }
+
+  // Track viewport height so the windowing math stays accurate across
+  // window resizes and detail-panel open/close.
+  $effect(() => {
+    if (!listEl) return;
+    viewportH = listEl.clientHeight;
+    const ro = new ResizeObserver(() => {
+      if (listEl) viewportH = listEl.clientHeight;
+    });
+    ro.observe(listEl);
+    return () => ro.disconnect();
+  });
 
   function addSource(kind: "file" | "docker", name: string, args: Record<string, unknown>) {
     bus?.send({
@@ -1261,7 +1323,8 @@
           </div>
         </div>
       {/if}
-      {#each entries as e (e.seq)}
+      <div style="height: {topPad}px"></div>
+      {#each visible as e (e.seq)}
         <div
           role="button"
           tabindex="0"
@@ -1297,6 +1360,7 @@
           </div>
         </div>
       {/each}
+      <div style="height: {bottomPad}px"></div>
       {#if entries.length > 0 && historyLoading}
         <div class="text-center text-[11px] text-zinc-500 py-2">Loading older…</div>
       {:else if entries.length > 0 && historyExhausted}
@@ -1390,6 +1454,7 @@
     {showQuickBar}
     {showTimestamps}
     {showTimeline}
+    profileNames={profiles.map((p) => p.name)}
     onChangeTheme={(t) => (theme = t)}
     onChangeDensity={(d) => (density = d)}
     onChangeShowQuickBar={(v) => (showQuickBar = v)}

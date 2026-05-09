@@ -114,6 +114,7 @@
     </header>
 
     <div class="flex-1 overflow-y-auto px-4 py-3 space-y-5">
+      <p class="text-[10px] text-zinc-500">Column widths are saved per device; visibility and order follow your profile.</p>
       <section>
         <h3 class="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold mb-2">Active</h3>
         <ul class="space-y-1">

@@ -698,6 +698,82 @@ func (s *Store) Materialize(seq uint64) *MaterializedRow {
 	return row
 }
 
+// DebugSnapshot is a point-in-time snapshot of memory usage and ring
+// state, intended for the /api/debug/store endpoint. Field names mirror
+// the JSON we expose; reading is read-locked.
+type DebugSnapshot struct {
+	Cap     uint64              `json:"cap"`
+	Head    uint64              `json:"head"`
+	Tail    uint64              `json:"tail"`
+	Rows    uint64              `json:"rows"`
+	Intern  InternStats         `json:"intern"`
+	Blobs   BlobStats           `json:"blobs"`
+	Columns []ColumnStat        `json:"columns"`
+}
+
+type InternStats struct {
+	Live       int `json:"live"`
+	Free       int `json:"free"`
+	ArenaBytes int `json:"arena_bytes"`
+}
+
+type BlobStats struct {
+	Live  int `json:"live"`
+	Free  int `json:"free"`
+	Bytes int `json:"bytes"`
+}
+
+type ColumnStat struct {
+	Name        string `json:"name"`
+	Mode        string `json:"mode"` // "f64" | "dict" | "raw"
+	Cardinality uint32 `json:"cardinality,omitempty"`
+}
+
+// Snapshot returns the current store stats. Cheap; intended for diagnostics.
+func (s *Store) Snapshot() DebugSnapshot {
+	s.mu.RLock()
+	head, tail := s.head, s.tail
+	s.mu.RUnlock()
+
+	il, ifree, ibytes := s.intern.Stats()
+	bl, bfree, bbytes := s.blobs.Stats()
+
+	names := s.HotColumnNames()
+	cols := make([]ColumnStat, 0, len(names))
+	for _, n := range names {
+		c := s.HotColumn(n)
+		if c == nil {
+			continue
+		}
+		cols = append(cols, ColumnStat{
+			Name:        n,
+			Mode:        columnModeName(c.Kind),
+			Cardinality: c.Cardinality(),
+		})
+	}
+	return DebugSnapshot{
+		Cap:     s.cap,
+		Head:    head,
+		Tail:    tail,
+		Rows:    head - tail,
+		Intern:  InternStats{Live: il, Free: ifree, ArenaBytes: ibytes},
+		Blobs:   BlobStats{Live: bl, Free: bfree, Bytes: bbytes},
+		Columns: cols,
+	}
+}
+
+func columnModeName(k ColumnKind) string {
+	switch k {
+	case ColF64:
+		return "f64"
+	case ColDict:
+		return "dict"
+	case ColRaw:
+		return "raw"
+	}
+	return "?"
+}
+
 // SetSourceNameLookup registers (or replaces) the source-id → name resolver.
 // Safe to call before or after Append.
 func (s *Store) SetSourceNameLookup(fn func(uint64) string) {

@@ -78,3 +78,68 @@ filter = "level:error"
 		}
 	}
 }
+
+// TestAutostartAndProfileSourcesMerge: Sources.Autostart and Profile.Sources
+// must round-trip across multi-file merges. Autostart in user config must
+// survive being absent from repo config (merge isn't supposed to clobber
+// scalar slices that aren't redefined in a later layer).
+func TestAutostartAndProfileSourcesMerge(t *testing.T) {
+	tmp := t.TempDir()
+	user := filepath.Join(tmp, "user.toml")
+	repo := filepath.Join(tmp, "repo.toml")
+	if err := os.WriteFile(user, []byte(`
+[[sources.autostart]]
+kind = "docker"
+name = "api"
+
+[[profiles]]
+name = "alpha"
+[[profiles.sources]]
+kind = "file"
+name = "/var/log/a.log"
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// repo overrides "alpha" with a different profile.sources list
+	if err := os.WriteFile(repo, []byte(`
+[[profiles]]
+name = "alpha"
+[[profiles.sources]]
+kind = "docker"
+name = "worker"
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := Defaults()
+	var found []string
+	if err := mergeFile(&cfg, user, &found); err != nil {
+		t.Fatal(err)
+	}
+	if err := mergeFile(&cfg, repo, &found); err != nil {
+		t.Fatal(err)
+	}
+
+	// Autostart was only set in user; repo doesn't redeclare it. Must survive.
+	if got := len(cfg.Sources.Autostart); got != 1 {
+		t.Fatalf("autostart: want 1 entry, got %d (%+v)", got, cfg.Sources.Autostart)
+	}
+	if cfg.Sources.Autostart[0].Kind != "docker" || cfg.Sources.Autostart[0].Name != "api" {
+		t.Errorf("autostart entry: got %+v", cfg.Sources.Autostart[0])
+	}
+
+	// alpha.sources should be the repo override (last wins on profile by name).
+	var alpha *Profile
+	for i := range cfg.Profiles {
+		if cfg.Profiles[i].Name == "alpha" {
+			alpha = &cfg.Profiles[i]
+			break
+		}
+	}
+	if alpha == nil {
+		t.Fatalf("missing alpha profile")
+	}
+	if len(alpha.Sources) != 1 || alpha.Sources[0].Kind != "docker" || alpha.Sources[0].Name != "worker" {
+		t.Errorf("alpha.sources after override: got %+v", alpha.Sources)
+	}
+}

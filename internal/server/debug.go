@@ -104,3 +104,15 @@ func (s *Server) handleAPIDebugFilter(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
 }
+
+// handleAPIDebugStore returns a snapshot of in-memory store usage:
+// ring head/tail/rows, interner + blob stats, and per-column cardinality
+// and mode (dict vs raw vs f64). Used to spot-check memory shape during
+// long-running sessions.
+//
+// Mounted only when Server was constructed with Options.Debug=true.
+func (s *Server) handleAPIDebugStore(w http.ResponseWriter, _ *http.Request) {
+	snap := s.store.Snapshot()
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(snap)
+}
