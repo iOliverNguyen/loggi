@@ -40,10 +40,17 @@ export interface SourceEventWire {
   detail?: string;
 }
 
+export interface SourceRef {
+  kind: string; // "file" | "docker"
+  name: string;
+  args?: Record<string, unknown>;
+}
+
 export interface Profile {
   name: string;
   filter: string;
   columns?: string[];
+  sources?: SourceRef[];
 }
 
 export interface ServerMsg {

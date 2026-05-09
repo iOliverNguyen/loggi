@@ -6,18 +6,19 @@ import "encoding/json"
 
 // ClientMsg is sent from a client (CLI tail, web UI) to the server.
 type ClientMsg struct {
-	Type        string          `json:"type"`
-	ID          uint64          `json:"id,omitempty"`
-	Subscribe   *Subscribe      `json:"subscribe,omitempty"`
-	Unsubscribe *Unsubscribe    `json:"unsubscribe,omitempty"`
-	Pause       *Pause          `json:"pause,omitempty"`
-	Resume      *Resume         `json:"resume,omitempty"`
-	Filter      *UpdateFilter   `json:"filter,omitempty"`
-	AddSource   *AddSource      `json:"add_source,omitempty"`
-	RemoveSrc   *RemoveSource   `json:"remove_source,omitempty"`
-	StreamData  *StreamData     `json:"stream_data,omitempty"`
-	History     *History        `json:"history,omitempty"`
-	Ping        *Ping           `json:"ping,omitempty"`
+	Type            string           `json:"type"`
+	ID              uint64           `json:"id,omitempty"`
+	Subscribe       *Subscribe       `json:"subscribe,omitempty"`
+	Unsubscribe     *Unsubscribe     `json:"unsubscribe,omitempty"`
+	Pause           *Pause           `json:"pause,omitempty"`
+	Resume          *Resume          `json:"resume,omitempty"`
+	Filter          *UpdateFilter    `json:"filter,omitempty"`
+	AddSource       *AddSource       `json:"add_source,omitempty"`
+	RemoveSrc       *RemoveSource    `json:"remove_source,omitempty"`
+	StreamData      *StreamData      `json:"stream_data,omitempty"`
+	History         *History         `json:"history,omitempty"`
+	Ping            *Ping            `json:"ping,omitempty"`
+	ActivateProfile *ActivateProfile `json:"activate_profile,omitempty"`
 }
 
 // ServerMsg is sent from server to a client.
@@ -62,6 +63,19 @@ type StreamData struct {
 }
 type Ping struct{ Nonce uint64 `json:"nonce"` }
 type Pong struct{ Nonce uint64 `json:"nonce"` }
+
+// ActivateProfile tells the server which profile this client is now using.
+// The server diffs Profile.Sources against the previously-active set and
+// adds/removes sources accordingly. Empty Name means "no active profile" —
+// the server tears down anything it added on behalf of the previous one.
+//
+// Activation is server-global, not per-session: with multiple tabs open the
+// last activate wins. Manually-added sources (kind "file"/"docker" via
+// add_source) are NOT touched on profile switch — only sources the server
+// itself attached on a previous activate_profile.
+type ActivateProfile struct {
+	Name string `json:"name"`
+}
 
 // History requests up to Limit matching entries strictly before BeforeSeq on
 // the existing subscription's filter. Reply is a LogBatch with IsHistory=true.
@@ -134,8 +148,9 @@ const (
 	CMsgAddSource   = "add_source"
 	CMsgRemoveSrc   = "remove_source"
 	CMsgStreamData  = "stream_data"
-	CMsgHistory     = "history"
-	CMsgPing        = "ping"
+	CMsgHistory         = "history"
+	CMsgPing            = "ping"
+	CMsgActivateProfile = "activate_profile"
 
 	SMsgBatch    = "batch"
 	SMsgSource   = "source"

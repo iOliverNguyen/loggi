@@ -243,6 +243,13 @@
           type: "subscribe",
           subscribe: { sub_id: SUB_ID, filter, history_n: INITIAL_HISTORY },
         });
+        // Tell the server which profile we're using so it can apply the
+        // per-profile sources overlay. Sent on every (re)connect so the
+        // overlay is restored after the server-side state was lost (e.g.
+        // server restart, idle exit/relaunch).
+        if (activeProfile) {
+          bus!.send({ type: "activate_profile", activate_profile: { name: activeProfile } });
+        }
       }
     };
   });
@@ -304,7 +311,7 @@
       }
     } else if (m.type === "batch" && m.batch) {
       if (m.batch.gap_n) dropped += m.batch.gap_n;
-      const incoming = (m.batch.entries ?? []).map(decodeEntry);
+      const incoming: Entry[] = (m.batch.entries ?? []).map(decodeEntry);
       // Track field names discovered from each row's nested JSON for the
       // filter builder's column dropdown.
       for (const e of incoming) {
@@ -477,6 +484,10 @@
       if (p.columns && p.columns.length > 0) columns = fromProfileIDs(p.columns);
       applyFilter();
     }
+    // Drive the server-side sources overlay. Server diffs against whatever
+    // it last activated; failures show up as ack/err but don't block the
+    // client-side filter/columns swap above.
+    bus?.send({ type: "activate_profile", activate_profile: { name } });
   }
 
   function quickLevel(expr: string) {
@@ -1440,11 +1451,15 @@
     initialName={activeProfile && profiles.some((p) => p.name === activeProfile) ? "" : activeProfile}
     initialFilter={filter}
     initialColumns={toProfileIDs(columns)}
+    currentSources={sources.map((s) => ({ kind: s.kind, name: s.name }))}
     onClose={() => (showSaveProfile = false)}
     onSaved={async (name, path) => {
       await refreshProfiles();
       activeProfile = name;
       localStorage.setItem("loggi.profile", name);
+      // Re-activate so the server picks up newly-bundled sources for the
+      // just-saved profile (no-op if Sources didn't change).
+      bus?.send({ type: "activate_profile", activate_profile: { name } });
       flashToast(`saved to ${path}`);
     }} />
 {/if}

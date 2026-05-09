@@ -65,7 +65,7 @@ func runServer(_ bool, debug bool) error {
 	profiles := make([]server.ProfileInfo, 0, len(cfg.Profiles))
 	for _, p := range cfg.Profiles {
 		profiles = append(profiles, server.ProfileInfo{
-			Name: p.Name, Filter: p.Filter, Columns: p.Columns,
+			Name: p.Name, Filter: p.Filter, Columns: p.Columns, Sources: p.Sources,
 		})
 	}
 	srv := server.NewServer(server.Options{

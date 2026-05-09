@@ -12,6 +12,7 @@ export type ClientMsg = {
   remove_source?: { source_id: number };
   history?: { sub_id: number; before_seq: number; limit: number };
   ping?: { nonce: number };
+  activate_profile?: { name: string };
 };
 
 // Bus is a self-reconnecting WebSocket client. Callers register handlers and

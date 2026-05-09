@@ -59,10 +59,16 @@ type Options struct {
 }
 
 // ProfileInfo is the wire representation of a config profile.
+//
+// Sources is round-tripped here so ActivateProfile can look up the
+// per-profile source list without re-reading the TOML on every switch.
+// It mirrors config.Profile.Sources; on save (handleProfileSave) it's
+// refreshed from the request body.
 type ProfileInfo struct {
-	Name    string   `json:"name"`
-	Filter  string   `json:"filter"`
-	Columns []string `json:"columns,omitempty"`
+	Name    string             `json:"name"`
+	Filter  string             `json:"filter"`
+	Columns []string           `json:"columns,omitempty"`
+	Sources []config.SourceRef `json:"sources,omitempty"`
 }
 
 // Server is the main entrypoint for the loggi server.
@@ -96,6 +102,14 @@ type Server struct {
 	// reader would walk a backing array being rewritten in place.
 	profilesMu sync.Mutex
 
+	// activeMu serializes ActivateProfile. activeProfileSources records
+	// what the previous activation declared (NOT what we actually started
+	// — see ActivateProfile for the difference). Reset to nil when the
+	// caller activates "" (no profile).
+	activeMu             sync.Mutex
+	activeProfile        string
+	activeProfileSources []config.SourceRef
+
 	httpListener net.Listener
 	unixListener net.Listener
 
@@ -114,6 +128,12 @@ type Server struct {
 type sourceRec struct {
 	src    source.Source
 	cancel context.CancelFunc
+	// owner identifies who attached this source so profile-switch teardown
+	// only touches sources the profile system actually started.
+	//   ""               — manual add (websocket / REST), CLI flag, or autostart
+	//   "profile:<name>" — added on behalf of the named profile via ActivateProfile
+	// Set once at attach time; never updated. Read under srcMu (RLock OK).
+	owner string
 	// mode is set once on first ingested line; readers use atomic load to
 	// avoid contention with the per-line ingester check. nil means
 	// undetected.
@@ -240,9 +260,20 @@ func (s *Server) applyAutostart() {
 	}
 }
 
-// startAutostartRef dispatches one SourceRef to the matching AddXxxSource.
-// Stdin is intentionally rejected — it can't be replayed at boot.
+// startAutostartRef dispatches one SourceRef to the matching AddXxxSource
+// helper. Stdin is intentionally rejected — it can't be replayed at boot.
+// Used both by the boot-time autostart loop and the REST endpoint that
+// adds a source from the SettingsModal; both paths attribute the source
+// to the user (owner=""), since "autostart" and "manual add" are
+// indistinguishable at the source-level — neither is bound to a profile.
 func (s *Server) startAutostartRef(ref config.SourceRef) (uint64, error) {
+	return s.startSourceRef(ref, "")
+}
+
+// startSourceRef is the owner-aware dispatcher used by ActivateProfile
+// (with owner="profile:<name>") and startAutostartRef (with owner="").
+// File ref Args["path"] override is supported; for docker it's a no-op.
+func (s *Server) startSourceRef(ref config.SourceRef, owner string) (uint64, error) {
 	switch ref.Kind {
 	case "file":
 		path := ref.Name
@@ -252,15 +283,131 @@ func (s *Server) startAutostartRef(ref config.SourceRef) (uint64, error) {
 		if path == "" {
 			return 0, fmt.Errorf("missing path")
 		}
-		return s.AddFileSource(path)
+		return s.addFileSource(path, owner)
 	case "docker":
 		if ref.Name == "" {
 			return 0, fmt.Errorf("missing container name")
 		}
-		return s.AddDockerSource(ref.Name)
+		return s.addDockerSource(ref.Name, owner)
 	default:
 		return 0, fmt.Errorf("unsupported kind %q", ref.Kind)
 	}
+}
+
+// ActivateProfile applies the named profile's Sources as an overlay:
+// stops sources tagged with the previous profile that aren't in the new
+// one, starts new ones that aren't already running. Manual adds (owner
+// "") and autostarts (also owner "") are never touched.
+//
+// Empty name = "no profile" — tears down anything previously added on
+// behalf of a profile and clears the active state. Idempotent: activating
+// the same profile twice is a no-op.
+//
+// Behaviour notes:
+//   - The diff is computed against activeProfileSources (what the LAST
+//     activation declared), not against the profile's current Sources on
+//     disk. The look-up DOES read the latest Sources from s.opts.Profiles
+//     each call, so an explicit re-activation after editing the active
+//     profile picks up the new refs.
+//   - If a source the profile declares is already open under a different
+//     owner (manual add, autostart), the dedup in addFileSource/
+//     addDockerSource returns the existing id WITHOUT rewriting its
+//     owner, so the source survives the next profile switch.
+//   - Failures during toAdd are logged and skipped — partial activation
+//     is preferred over rolling back changes already applied.
+//   - Re-activating the same profile name with an unchanged Sources
+//     list is a free no-op (the diff finds nothing); we deliberately
+//     don't short-circuit on name alone because that would mask
+//     post-save Sources updates from the running session.
+//
+// Source events are broadcast on the existing channel so all connected
+// sessions see the same source list.
+func (s *Server) ActivateProfile(name string) error {
+	s.activeMu.Lock()
+	defer s.activeMu.Unlock()
+
+	var newRefs []config.SourceRef
+	if name != "" {
+		s.profilesMu.Lock()
+		var found bool
+		for _, p := range s.opts.Profiles {
+			if p.Name == name {
+				newRefs = append(newRefs, p.Sources...)
+				found = true
+				break
+			}
+		}
+		s.profilesMu.Unlock()
+		if !found {
+			return fmt.Errorf("profile not found: %q", name)
+		}
+	}
+
+	oldRefs := s.activeProfileSources
+	oldOwner := ""
+	if s.activeProfile != "" {
+		oldOwner = "profile:" + s.activeProfile
+	}
+	toRemove := refsMinus(oldRefs, newRefs)
+	toAdd := refsMinus(newRefs, oldRefs)
+
+	for _, r := range toRemove {
+		kind := source.Kind(r.Kind)
+		ident := r.Name
+		if v, ok := r.Args["path"].(string); ok && v != "" && kind == source.KindFile {
+			ident = v
+		}
+		if id, ok := s.findOpenSourceWithOwner(kind, ident, oldOwner); ok {
+			if err := s.RemoveSource(id); err != nil {
+				s.logger.Printf("activate %q: remove %s/%s: %v", name, r.Kind, ident, err)
+				continue
+			}
+			s.broadcastSourceEvent(wire.SourceEvent{
+				SourceID: id, Kind: r.Kind, Name: ident, State: "closed",
+			})
+		}
+	}
+
+	newOwner := ""
+	if name != "" {
+		newOwner = "profile:" + name
+	}
+	for _, r := range toAdd {
+		id, err := s.startSourceRef(r, newOwner)
+		if err != nil {
+			s.logger.Printf("activate %q: start %s/%s: %v", name, r.Kind, r.Name, err)
+			continue
+		}
+		s.broadcastSourceState(id, "open", "")
+	}
+
+	s.activeProfile = name
+	s.activeProfileSources = newRefs
+	return nil
+}
+
+// refsMinus returns refs in a not present in b, matching by (kind, name).
+// Args (e.g. file path overrides) are intentionally ignored: identity is
+// (kind, name) only — a profile that changes a ref's args without
+// changing kind+name is treated as "no change" by the diff.
+func refsMinus(a, b []config.SourceRef) []config.SourceRef {
+	if len(a) == 0 {
+		return nil
+	}
+	out := make([]config.SourceRef, 0, len(a))
+	for _, r := range a {
+		found := false
+		for _, q := range b {
+			if r.Kind == q.Kind && r.Name == q.Name {
+				found = true
+				break
+			}
+		}
+		if !found {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // tickStats walks active sources every second and updates each one's
@@ -325,13 +472,23 @@ func (s *Server) Shutdown() {
 	}
 }
 
-// AddFileSource adds a tail-file source. Idempotent: if an open source with
-// the same path already exists, returns its id without creating a duplicate.
+// AddFileSource adds a tail-file source attributed to the user (no owner
+// tag). See addFileSource for the owner-aware form.
+func (s *Server) AddFileSource(path string) (uint64, error) {
+	return s.addFileSource(path, "")
+}
+
+// addFileSource is the owner-aware implementation of AddFileSource.
+// Idempotent on path: if an open source with the same path already exists
+// — regardless of owner — returns its id without creating a duplicate.
+// The existing source's owner is preserved (we don't rewrite it), so a
+// later profile switch won't tear down a source the user had manually
+// added.
 //
 // Re-reads source_defaults.file_poll_ms from disk so a settings change
 // applies to the next add without a server restart. Falls back to the
 // boot-time s.opts.FilePollMS on read failure (logged).
-func (s *Server) AddFileSource(path string) (uint64, error) {
+func (s *Server) addFileSource(path, owner string) (uint64, error) {
 	if id, ok := s.findOpenSource(source.KindFile, path); ok {
 		return id, nil
 	}
@@ -343,27 +500,36 @@ func (s *Server) AddFileSource(path string) (uint64, error) {
 		pollMS = user.Sources.Defaults.FilePollMS
 	}
 	src := newFileSource(id, path, pollMS)
-	return id, s.attach(id, src)
+	return id, s.attach(id, src, owner)
 }
 
 // AddStdinSource adds a stdin-forwarded source. Returns the source id and a
 // pointer to the underlying stdin source so the calling session can push data.
 // Stdin sources are not deduped: each pipe deserves its own ingest stream.
+// Always owner="" — stdin pipes are inherently user-driven and have no
+// profile-managed lifecycle.
 func (s *Server) AddStdinSource(name string) (uint64, *stdinSource, error) {
 	id := s.srcGen.Next()
 	src := newStdinSource(id, name)
-	if err := s.attach(id, src); err != nil {
+	if err := s.attach(id, src, ""); err != nil {
 		return 0, nil, err
 	}
 	return id, src, nil
 }
 
-// AddDockerSource adds a docker container source. Idempotent on container
-// name: re-clicking "Add" returns the existing id without spawning a parallel
-// tail. Initial backfill is Options.DockerTail lines from the engine
+// AddDockerSource adds a docker container source attributed to the user
+// (no owner tag). See addDockerSource for the owner-aware form.
+func (s *Server) AddDockerSource(name string) (uint64, error) {
+	return s.addDockerSource(name, "")
+}
+
+// addDockerSource is the owner-aware implementation of AddDockerSource.
+// Idempotent on container name: re-clicking "Add" returns the existing
+// id without spawning a parallel tail, regardless of the existing source's
+// owner. Initial backfill is Options.DockerTail lines from the engine
 // (default 1000); the client typically renders only the most recent ~300
 // and pages older entries through the History RPC.
-func (s *Server) AddDockerSource(name string) (uint64, error) {
+func (s *Server) addDockerSource(name, owner string) (uint64, error) {
 	if id, ok := s.findOpenSource(source.KindDocker, name); ok {
 		return id, nil
 	}
@@ -381,7 +547,7 @@ func (s *Server) AddDockerSource(name string) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	return id, s.attach(id, src)
+	return id, s.attach(id, src, owner)
 }
 
 // findOpenSource returns the id of an open source matching (kind, identifier)
@@ -402,9 +568,27 @@ func (s *Server) findOpenSource(kind source.Kind, ident string) (uint64, bool) {
 	return 0, false
 }
 
-func (s *Server) attach(id uint64, src source.Source) error {
+// findOpenSourceWithOwner is like findOpenSource but only matches sources
+// whose owner tag equals the given value. Used by ActivateProfile to scope
+// teardown to sources the profile system itself attached, leaving manual
+// adds and autostarts alone.
+func (s *Server) findOpenSourceWithOwner(kind source.Kind, ident, owner string) (uint64, bool) {
+	s.srcMu.RLock()
+	defer s.srcMu.RUnlock()
+	for id, r := range s.srcs {
+		if r.state != "open" || r.owner != owner {
+			continue
+		}
+		if r.src.Kind() == kind && r.src.Name() == ident {
+			return id, true
+		}
+	}
+	return 0, false
+}
+
+func (s *Server) attach(id uint64, src source.Source, owner string) error {
 	ctx, cancel := context.WithCancel(s.ctx)
-	rec := &sourceRec{src: src, cancel: cancel, state: "open"}
+	rec := &sourceRec{src: src, cancel: cancel, state: "open", owner: owner}
 	s.srcMu.Lock()
 	s.srcs[id] = rec
 	s.srcMu.Unlock()

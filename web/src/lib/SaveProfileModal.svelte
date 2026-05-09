@@ -1,8 +1,17 @@
 <script lang="ts">
-  let { initialName = "", initialFilter = "", initialColumns = [], onClose, onSaved } = $props<{
+  import type { SourceRef } from "./types";
+  let {
+    initialName = "",
+    initialFilter = "",
+    initialColumns = [],
+    currentSources = [],
+    onClose,
+    onSaved,
+  } = $props<{
     initialName?: string;
     initialFilter?: string;
     initialColumns?: string[];
+    currentSources?: SourceRef[];
     onClose: () => void;
     onSaved: (name: string, path: string) => void;
   }>();
@@ -10,8 +19,18 @@
   let name = $state(initialName);
   let filter = $state(initialFilter);
   let dest = $state<"user" | "repo">("user");
+  // Default OFF: profile == filter+columns is the historical mental model;
+  // bundling sources changes runtime behaviour on activation, which the
+  // user should opt into explicitly.
+  let includeSources = $state(false);
   let saving = $state(false);
   let error = $state("");
+
+  // Stdin sources can't be replayed at activation, so they're never
+  // included even when the box is checked.
+  let bundledSources = $derived(
+    includeSources ? currentSources.filter((s: SourceRef) => s.kind !== "stdin") : [],
+  );
 
   async function save() {
     if (!name.trim()) {
@@ -29,6 +48,7 @@
           filter,
           columns: initialColumns,
           collapsed_fields: [],
+          sources: bundledSources,
           destination: dest,
         }),
       });
@@ -74,6 +94,24 @@
         <input
           class="w-full mt-0.5 px-2 py-1 rounded bg-zinc-100 dark:bg-zinc-800 mono border border-transparent focus:border-sky-500 outline-none"
           bind:value={filter} />
+      </label>
+      <label class="block">
+        <span class="text-xs text-zinc-500 inline-flex items-center gap-2">
+          <input type="checkbox" bind:checked={includeSources} />
+          Include current sources
+        </span>
+        {#if includeSources}
+          <div class="mt-1 px-2 py-1.5 rounded bg-zinc-50 dark:bg-zinc-800/50 text-[11px] mono space-y-0.5 max-h-24 overflow-y-auto">
+            {#if bundledSources.length === 0}
+              <span class="text-zinc-500 italic">No file/docker sources currently open.</span>
+            {:else}
+              {#each bundledSources as s}
+                <div class="flex gap-2"><span class="text-zinc-500 w-12">{s.kind}</span><span class="truncate">{s.name}</span></div>
+              {/each}
+            {/if}
+          </div>
+          <p class="mt-1 text-[10px] text-zinc-500">Activating this profile will start these and stop ones unique to the previous profile. Stdin sources are excluded.</p>
+        {/if}
       </label>
       <div>
         <span class="text-xs text-zinc-500">Save to</span>

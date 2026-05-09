@@ -60,10 +60,14 @@ type Profile struct {
 	// it yet. Either wire it up or drop it; left in place because tests
 	// already cover it.
 	SavedFilters []SavedFilter `toml:"saved_filters"`
-	// TODO: Sources is round-tripped through the schema and saveProfileReq
-	// but no UI sends it and no runtime path reads it. Planned overlay-on-
-	// activation behaviour is sketched in
-	// _docs/review/plans/profile-sources-overlay.md.
+	// Sources is the per-profile overlay applied on activation. Server's
+	// ActivateProfile diffs against what the previous profile declared
+	// (NOT current live sources): refs unique to the previous profile
+	// are stopped, refs unique to the new profile are started. Manual
+	// adds and Sources.Autostart are not touched.
+	//
+	// SaveProfileModal "Include current sources" checkbox controls whether
+	// the UI bundles the live (kind, name) pairs into this field on save.
 	Sources []SourceRef `toml:"sources,omitempty"`
 }
 

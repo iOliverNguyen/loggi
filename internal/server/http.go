@@ -157,7 +157,7 @@ func (s *Server) handleProfileDelete(w http.ResponseWriter, r *http.Request) {
 // refreshProfiles updates s.opts.Profiles in place so subsequent GETs reflect
 // the saved profile. Replaces by name if present, else appends.
 func (s *Server) refreshProfiles(name string, p config.Profile) {
-	info := ProfileInfo{Name: p.Name, Filter: p.Filter, Columns: p.Columns}
+	info := ProfileInfo{Name: p.Name, Filter: p.Filter, Columns: p.Columns, Sources: p.Sources}
 	s.profilesMu.Lock()
 	defer s.profilesMu.Unlock()
 	for i := range s.opts.Profiles {

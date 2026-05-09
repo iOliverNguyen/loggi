@@ -177,6 +177,20 @@ func (sess *session) handle(msg *wire.ClientMsg) {
 			nonce = msg.Ping.Nonce
 		}
 		_ = sess.conn.Write(&wire.ServerMsg{Type: wire.SMsgPong, Pong: &wire.Pong{Nonce: nonce}})
+	case wire.CMsgActivateProfile:
+		// Activation is server-global by design (sources live on the
+		// server, not per-session) — last-tab wins. Clients echo the
+		// switch on their own filter/columns logic; the server only
+		// drives the sources overlay.
+		var name string
+		if msg.ActivateProfile != nil {
+			name = msg.ActivateProfile.Name
+		}
+		if err := sess.srv.ActivateProfile(name); err != nil {
+			sess.errMsg(msg.ID, "activate_profile", err.Error())
+			return
+		}
+		sess.ack(msg.ID, true, 0, 0, "")
 	default:
 		sess.errMsg(msg.ID, "unknown_msg", "unknown type: "+msg.Type)
 	}

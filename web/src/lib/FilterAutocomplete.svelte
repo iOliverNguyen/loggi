@@ -87,16 +87,16 @@
     // Whole-input is empty + focused → show recent filters as the
     // primary suggestion list.
     if (!trimmedAll && (recentFilters?.length ?? 0) > 0) {
-      return recentFilters!.slice(0, 12).map((t) => ({ text: t, kind: "history" as const }));
+      return recentFilters!.slice(0, 12).map((t: string) => ({ text: t, kind: "history" as const }));
     }
 
     // While typing, also surface history entries that contain the
     // current input as a substring (case-insensitive). These appear
     // *after* field/value suggestions.
-    const historyHits: Suggestion[] = (recentFilters ?? [])
-      .filter((h) => h !== trimmedAll && h.toLowerCase().includes(trimmedAll.toLowerCase()))
+    const historyHits: Suggestion[] = ((recentFilters as string[] | undefined) ?? [])
+      .filter((h: string) => h !== trimmedAll && h.toLowerCase().includes(trimmedAll.toLowerCase()))
       .slice(0, 5)
-      .map((t) => ({ text: t, kind: "history" as const }));
+      .map((t: string) => ({ text: t, kind: "history" as const }));
 
     if (!word) {
       // Empty word at caret with non-empty input — show top-level field

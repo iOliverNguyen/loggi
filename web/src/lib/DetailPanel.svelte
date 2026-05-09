@@ -63,7 +63,7 @@
   }
 
   function srcOf(id: number): SourceInfo | undefined {
-    return sources.find((s) => s.id === id);
+    return (sources as SourceInfo[]).find((s) => s.id === id);
   }
 
   function valueLiteral(v: unknown): string {

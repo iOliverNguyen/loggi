@@ -10,9 +10,6 @@
 
   let hoverId = $state<string | null>(null);
   let containerAnchors = $state<Record<string, HTMLDivElement>>({});
-  let hoveredContainer = $derived(
-    hoverId ? dockerList.find((c) => c.id === hoverId) ?? null : null,
-  );
 
   // Window-level keyboard handler so ←/→ work even when no element inside
   // the picker has focus (the per-element onkeydown only fires for events
@@ -39,6 +36,11 @@
 
   let tab = $state<Kind>("docker");
   let dockerList = $state<Container[]>([]);
+  // Declared after dockerList so svelte-check sees the dependency in
+  // declaration order; functionally identical to a top-of-script $derived.
+  let hoveredContainer = $derived(
+    hoverId ? dockerList.find((c) => c.id === hoverId) ?? null : null,
+  );
   let dockerErr = $state("");
   let dockerLoading = $state(false);
   let dockerSearch = $state("");
