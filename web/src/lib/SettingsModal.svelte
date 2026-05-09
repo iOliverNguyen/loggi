@@ -128,18 +128,41 @@
     }
   }
 
-  function removeAutostart(i: number) {
+  // Best-effort: if a live source matches (kind, name), remove it too so
+  // the user doesn't have to restart loggi just to retire an autostart entry.
+  async function removeAutostart(i: number) {
+    const ref = autostart[i];
     autostart = autostart.filter((_, idx) => idx !== i);
-    persistAutostart();
-  }
-  function onAddAutostart(kind: "file" | "docker", name: string, args: Record<string, unknown>) {
-    if (autostart.some((r) => r.kind === kind && r.name === name)) {
-      showAddPicker = false;
-      return;
+    await persistAutostart();
+    try {
+      const r = await fetch("/api/sources");
+      if (!r.ok) return;
+      const live = (await r.json()) as Array<{ id: number; kind: string; name: string }>;
+      const match = live.find((s) => s.kind === ref.kind && s.name === ref.name);
+      if (match) {
+        await fetch(`/api/sources?id=${match.id}`, { method: "DELETE" });
+      }
+    } catch {
+      /* surfacing this would be noisy; the autostart entry is already removed from disk */
     }
-    autostart = [...autostart, { kind, name, args }];
+  }
+
+  // Persist to autostart AND start the source live so the user sees data
+  // immediately. Avoids a "saved but not running until restart" footgun.
+  async function onAddAutostart(kind: "file" | "docker", name: string, args: Record<string, unknown>) {
     showAddPicker = false;
-    persistAutostart();
+    if (autostart.some((r) => r.kind === kind && r.name === name)) return;
+    autostart = [...autostart, { kind, name, args }];
+    await persistAutostart();
+    try {
+      await fetch("/api/sources", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind, name, args }),
+      });
+    } catch (e: any) {
+      configError = e?.message ?? "added to autostart, but failed to start now";
+    }
   }
 
   function confirmClearLocal() {

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"strconv"
@@ -194,19 +195,43 @@ func (s *Server) handleAPIConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAPIConfigGet(w http.ResponseWriter, _ *http.Request) {
-	// Read autostart from disk so the response reflects what's persisted,
-	// not just what the server happened to apply at boot. Best-effort —
-	// missing file → empty list.
-	user, _ := config.LoadUser()
+	// Single source of truth: read everything mutable from disk. Avoids a
+	// data race with handleAPIConfigPost (which writes only to disk now)
+	// and ensures GET reflects what was actually persisted.
+	//
+	// Server block (idle_timeout / ring_buffer / http_bind) is immutable
+	// post-boot, so it stays in s.opts.
+	user, err := config.LoadUser()
+	if err != nil {
+		s.logger.Printf("config GET: load user: %v", err)
+	}
+	// Fallback semantics: zero/empty disk values are treated as "unset"
+	// and fall back to s.opts.* (the boot-time default). This means a
+	// caller can't currently POST `theme: ""` or `file_poll_ms: 0` to
+	// mean "explicit clear" — both are read back as the default. The UI
+	// never sends those values, so it's fine; if that changes, switch
+	// configPatch fields and these helpers to pointer types.
+	pick := func(diskVal, fallback string) string {
+		if diskVal != "" {
+			return diskVal
+		}
+		return fallback
+	}
+	pickInt := func(diskVal, fallback int) int {
+		if diskVal != 0 {
+			return diskVal
+		}
+		return fallback
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"theme":            s.opts.Theme,
-		"density":          s.opts.Density,
-		"default_profile":  s.opts.DefaultProfile,
-		"timestamp_format": s.opts.TimestampFormat,
+		"theme":            pick(user.UI.Theme, s.opts.Theme),
+		"density":          pick(user.UI.Density, s.opts.Density),
+		"default_profile":  pick(user.UI.DefaultProfile, s.opts.DefaultProfile),
+		"timestamp_format": pick(user.UI.TimestampFormat, s.opts.TimestampFormat),
 		"source_defaults": map[string]any{
-			"file_poll_ms": s.opts.FilePollMS,
-			"docker_tail":  s.opts.DockerTail,
+			"file_poll_ms": pickInt(user.Sources.Defaults.FilePollMS, s.opts.FilePollMS),
+			"docker_tail":  pickInt(user.Sources.Defaults.DockerTail, s.opts.DockerTail),
 		},
 		"server": map[string]any{
 			"idle_timeout": s.opts.IdleTimeout.String(),
@@ -245,30 +270,28 @@ func (s *Server) handleAPIConfigPost(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// Mutate disk only. s.opts is intentionally not updated here — GET
+	// reads from disk on each call, so there's no in-memory cache to keep
+	// in sync, and we avoid a data race with concurrent GETs / source
+	// attaches that read s.opts.DockerTail.
 	if p.Theme != nil {
 		user.UI.Theme = *p.Theme
-		s.opts.Theme = *p.Theme
 	}
 	if p.Density != nil {
 		user.UI.Density = *p.Density
-		s.opts.Density = *p.Density
 	}
 	if p.DefaultProfile != nil {
 		user.UI.DefaultProfile = *p.DefaultProfile
-		s.opts.DefaultProfile = *p.DefaultProfile
 	}
 	if p.TimestampFormat != nil {
 		user.UI.TimestampFormat = *p.TimestampFormat
-		s.opts.TimestampFormat = *p.TimestampFormat
 	}
 	if p.SourceDefaults != nil {
 		if p.SourceDefaults.FilePollMS != nil {
 			user.Sources.Defaults.FilePollMS = *p.SourceDefaults.FilePollMS
-			s.opts.FilePollMS = *p.SourceDefaults.FilePollMS
 		}
 		if p.SourceDefaults.DockerTail != nil {
 			user.Sources.Defaults.DockerTail = *p.SourceDefaults.DockerTail
-			s.opts.DockerTail = *p.SourceDefaults.DockerTail
 		}
 	}
 	if err := config.SaveUser(user); err != nil {
@@ -296,6 +319,18 @@ func (s *Server) handleAPIAutostart(w http.ResponseWriter, r *http.Request) {
 	if err := dec.Decode(&body); err != nil {
 		http.Error(w, "invalid JSON body: "+err.Error(), http.StatusBadRequest)
 		return
+	}
+	// Reject entries the autostart loop will silently skip at next boot —
+	// better to fail at save time than to leave invalid refs on disk.
+	for i, ref := range body.Autostart {
+		if ref.Kind != "file" && ref.Kind != "docker" {
+			http.Error(w, fmt.Sprintf("autostart[%d]: unsupported kind %q (want file|docker)", i, ref.Kind), http.StatusBadRequest)
+			return
+		}
+		if ref.Name == "" {
+			http.Error(w, fmt.Sprintf("autostart[%d]: name is required", i), http.StatusBadRequest)
+			return
+		}
 	}
 	user, err := config.LoadUser()
 	if err != nil {

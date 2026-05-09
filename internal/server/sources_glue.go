@@ -8,8 +8,8 @@ import (
 )
 
 // newFileSource is the constructor entry point used by Server.AddFileSource.
-func newFileSource(id uint64, path string) source.Source {
-	return filesrc.New(id, path)
+func newFileSource(id uint64, path string, pollMS int) source.Source {
+	return filesrc.New(id, path, pollMS)
 }
 
 // stdinSource is exposed via the Server API so a session can push bytes.

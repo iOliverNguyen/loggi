@@ -221,7 +221,10 @@ func (s *Server) Start() error {
 	go s.ingester()
 	go s.tickStats()
 
-	s.applyAutostart()
+	// Off the critical path: a slow Docker socket or many entries
+	// shouldn't delay HTTP listener readiness. Failures inside the loop
+	// already log + continue.
+	go s.applyAutostart()
 	s.startIdleTimer()
 	return nil
 }
@@ -324,12 +327,22 @@ func (s *Server) Shutdown() {
 
 // AddFileSource adds a tail-file source. Idempotent: if an open source with
 // the same path already exists, returns its id without creating a duplicate.
+//
+// Re-reads source_defaults.file_poll_ms from disk so a settings change
+// applies to the next add without a server restart. Falls back to the
+// boot-time s.opts.FilePollMS on read failure (logged).
 func (s *Server) AddFileSource(path string) (uint64, error) {
 	if id, ok := s.findOpenSource(source.KindFile, path); ok {
 		return id, nil
 	}
 	id := s.srcGen.Next()
-	src := newFileSource(id, path)
+	pollMS := s.opts.FilePollMS
+	if user, err := config.LoadUser(); err != nil {
+		s.logger.Printf("AddFileSource: load user config: %v (using boot-time poll=%dms)", err, pollMS)
+	} else if user.Sources.Defaults.FilePollMS > 0 {
+		pollMS = user.Sources.Defaults.FilePollMS
+	}
+	src := newFileSource(id, path, pollMS)
 	return id, s.attach(id, src)
 }
 
@@ -355,7 +368,16 @@ func (s *Server) AddDockerSource(name string) (uint64, error) {
 		return id, nil
 	}
 	id := s.srcGen.Next()
-	src, err := newDockerSource(id, name, s.opts.DockerTail)
+	// Re-read source_defaults.docker_tail from disk so that a change made
+	// via POST /api/config takes effect on the next add without a restart.
+	// Falls back to the boot-time s.opts.DockerTail on read failure.
+	tail := s.opts.DockerTail
+	if user, err := config.LoadUser(); err != nil {
+		s.logger.Printf("AddDockerSource: load user config: %v (using boot-time tail=%d)", err, tail)
+	} else if user.Sources.Defaults.DockerTail != 0 {
+		tail = user.Sources.Defaults.DockerTail
+	}
+	src, err := newDockerSource(id, name, tail)
 	if err != nil {
 		return 0, err
 	}

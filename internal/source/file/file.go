@@ -18,11 +18,14 @@ import (
 type Source struct {
 	id     uint64
 	path   string
+	pollMS int // tail-polling cadence; 0 → defaultPollMS
 	closed atomic.Bool
 }
 
-func New(id uint64, path string) *Source {
-	return &Source{id: id, path: path}
+const defaultPollMS = 50
+
+func New(id uint64, path string, pollMS int) *Source {
+	return &Source{id: id, path: path, pollMS: pollMS}
 }
 
 func (s *Source) ID() uint64        { return s.id }
@@ -71,7 +74,11 @@ func (s *Source) Run(ctx context.Context, out chan<- source.RawLine) error {
 }
 
 func (s *Source) waitForGrowth(ctx context.Context, f *os.File, pos *int64) error {
-	t := time.NewTicker(50 * time.Millisecond)
+	ms := s.pollMS
+	if ms <= 0 {
+		ms = defaultPollMS
+	}
+	t := time.NewTicker(time.Duration(ms) * time.Millisecond)
 	defer t.Stop()
 	for {
 		select {

@@ -32,10 +32,14 @@ type Sources struct {
 // SourceRef identifies a log source to start: a kind ("file" | "docker"),
 // the source-specific name (file path / container name), and any
 // kind-specific args. Used by Sources.Autostart and Profile.Sources.
+//
+// JSON tags are required: the SettingsModal types this as { kind, name,
+// args } and reads the lowercase form, so without tags the autostart UI
+// would render blank rows.
 type SourceRef struct {
-	Kind string         `toml:"kind"`
-	Name string         `toml:"name"`
-	Args map[string]any `toml:"args,omitempty"`
+	Kind string         `toml:"kind" json:"kind"`
+	Name string         `toml:"name" json:"name"`
+	Args map[string]any `toml:"args,omitempty" json:"args,omitempty"`
 }
 
 type SourceDefaults struct {
@@ -56,9 +60,10 @@ type Profile struct {
 	// it yet. Either wire it up or drop it; left in place because tests
 	// already cover it.
 	SavedFilters []SavedFilter `toml:"saved_filters"`
-	// Sources are applied as an overlay on profile activation: refs unique
-	// to the previous profile are removed; refs unique to this profile are
-	// added. Global Sources.Autostart is unaffected by profile switches.
+	// TODO: Sources is round-tripped through the schema and saveProfileReq
+	// but no UI sends it and no runtime path reads it. Planned overlay-on-
+	// activation behaviour is sketched in
+	// _docs/review/plans/profile-sources-overlay.md.
 	Sources []SourceRef `toml:"sources,omitempty"`
 }
 

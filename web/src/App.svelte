@@ -72,6 +72,29 @@
     try { localStorage.setItem("loggi.density", density); } catch {}
   });
 
+  // Density change rescales scrollTop by the rowH ratio so the user's
+  // currently-visible row stays put. Without this, the visible window
+  // jumps to a different seq when toggling Compact/Cozy/Comfortable.
+  function setDensity(d: Density) {
+    if (d === density) return;
+    const oldH = ROW_HEIGHT[density];
+    const newH = ROW_HEIGHT[d];
+    // Anchor on the row at viewport center (not list top), otherwise the
+    // visible row drifts by ~clientHeight/2 * (newH/oldH - 1). Subtract
+    // pinnedH symmetrically so a non-empty pinned section doesn't bias
+    // the anchor by up to `pinnedEntries.length` rows.
+    const pinnedH = pinnedEl?.offsetHeight ?? 0;
+    const anchorIdx = listEl
+      ? (listEl.scrollTop + listEl.clientHeight / 2 - pinnedH) / oldH
+      : 0;
+    density = d;
+    tick().then(() => {
+      if (!listEl) return;
+      const ph = pinnedEl?.offsetHeight ?? 0;
+      listEl.scrollTop = anchorIdx * newH + ph - listEl.clientHeight / 2;
+    });
+  }
+
   // In-page highlight term (separate from server-side filter). Empty string
   // = no highlighting. Substring match against msg, case-insensitive.
   let highlight = $state(localStorage.getItem("loggi.highlight") ?? "");
@@ -95,6 +118,7 @@
   // skip rendering off-screen rows even at 50k rows.
   const MAX = 50000;
   let listEl: HTMLElement | null = $state(null);
+  let pinnedEl: HTMLElement | null = $state(null);
   let stickToBottom = $state(true);
   let historyLoading = $state(false);
   let historyExhausted = $state(false);
@@ -226,7 +250,9 @@
   onDestroy(() => bus?.close());
 
   // Flush any debounced localStorage writes before the page goes away.
-  $effect(() => {
+  // Mount-once / destroy-once concern, so onMount + cleanup is the right
+  // primitive (vs. $effect, which is for reactive subscriptions).
+  onMount(() => {
     const flush = () => { for (const f of __debouncers) f(); };
     window.addEventListener("beforeunload", flush);
     return () => window.removeEventListener("beforeunload", flush);
@@ -298,6 +324,9 @@
         if (m.batch.end || fresh.length === 0) historyExhausted = true;
       } else {
         // Live + initial backlog: prepend in place.
+        // Note: spread-arg limit is ~65k; safe today because server
+        // batches are bounded well below that. Revisit if MAX climbs.
+        const prepended = fresh.length;
         entries.unshift(...fresh.reverse());
         if (entries.length > MAX) entries.length = MAX;
         if (fresh.length > 0) lastLiveAt = Date.now();
@@ -305,6 +334,10 @@
           tick().then(() => {
             if (listEl) listEl.scrollTop = 0;
           });
+        } else if (prepended > 0 && listEl) {
+          // Anchor the user's currently-visible row across the prepend so
+          // mid-list scrolling doesn't jump when live batches arrive.
+          listEl.scrollTop += prepended * rowH;
         }
       }
     } else if (m.type === "ack") {
@@ -800,11 +833,15 @@
     selectedSeq = entries[next].seq;
     // The selected row may not be in the DOM at all (windowed rendering),
     // so compute its position from `next * rowH` and scroll it into view.
+    // The sticky pinned section sits above the windowed rows and covers
+    // the first `pinnedH` pixels of the scrolled view; account for that
+    // when checking whether the row is "above" the visible area.
     requestAnimationFrame(() => {
       if (!listEl) return;
-      const top = next * rowH;
+      const pinnedH = pinnedEl?.offsetHeight ?? 0;
+      const top = pinnedH + next * rowH;
       const bot = top + rowH;
-      if (top < listEl.scrollTop) listEl.scrollTop = top;
+      if (top < listEl.scrollTop + pinnedH) listEl.scrollTop = top - pinnedH;
       else if (bot > listEl.scrollTop + listEl.clientHeight)
         listEl.scrollTop = bot - listEl.clientHeight;
     });
@@ -1114,7 +1151,7 @@
       class={iconBtnCls}
       title={`Density: ${density} (click to cycle)`}
       aria-label="cycle density"
-      onclick={() => (density = density === "compact" ? "cozy" : density === "cozy" ? "comfortable" : "compact")}>
+      onclick={() => setDensity(density === "compact" ? "cozy" : density === "cozy" ? "comfortable" : "compact")}>
       <Icon name="rows" size={16} />
     </button>
     <button
@@ -1287,7 +1324,7 @@
       onscroll={onScroll}
       class="flex-1 overflow-y-auto mono text-xs">
       {#if pinnedEntries.length > 0}
-        <div class="sticky top-0 z-10 bg-amber-50 dark:bg-amber-950/60 border-b border-amber-300/40 dark:border-amber-700/40">
+        <div bind:this={pinnedEl} class="sticky top-0 z-10 bg-amber-50 dark:bg-amber-950/60 border-b border-amber-300/40 dark:border-amber-700/40">
           {#each pinnedEntries as p}
             <div class="relative pl-4 pr-3 py-1 hover:bg-amber-100/70 dark:hover:bg-amber-900/40 cursor-pointer flex gap-3 items-baseline"
                  role="button"
@@ -1456,7 +1493,7 @@
     {showTimeline}
     profileNames={profiles.map((p) => p.name)}
     onChangeTheme={(t) => (theme = t)}
-    onChangeDensity={(d) => (density = d)}
+    onChangeDensity={(d) => setDensity(d)}
     onChangeShowQuickBar={(v) => (showQuickBar = v)}
     onChangeShowTimestamps={(v) => (showTimestamps = v)}
     onChangeShowTimeline={(v) => (showTimeline = v)}

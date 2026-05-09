@@ -67,11 +67,10 @@ func (s *Server) runSession(ctx context.Context, conn Conn) {
 		subs:      make(map[uint64]*sessionSub),
 		stdinSrcs: make(map[uint64]*stdinSource),
 	}
-	s.registerSession(sess)
-	defer s.unregisterSession(id)
-	defer sess.cleanup()
-
-	// Send a snapshot.
+	// Send the snapshot BEFORE registering the session. If we registered
+	// first, a concurrent broadcastSourceState (e.g. detectMode publishing
+	// "open" on first ingest) could slip a "source" frame in front of the
+	// snapshot — clients consume the first frame as a snapshot.
 	_ = conn.Write(&wire.ServerMsg{
 		Type: wire.SMsgSnapshot,
 		Snapshot: &wire.Snapshot{
@@ -79,6 +78,10 @@ func (s *Server) runSession(ctx context.Context, conn Conn) {
 			Head:    s.store.Head(),
 		},
 	})
+
+	s.registerSession(sess)
+	defer s.unregisterSession(id)
+	defer sess.cleanup()
 
 	for {
 		select {

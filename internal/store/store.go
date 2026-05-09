@@ -730,6 +730,13 @@ type ColumnStat struct {
 }
 
 // Snapshot returns the current store stats. Cheap; intended for diagnostics.
+//
+// Each component (head/tail, interner, blob slab, columns) is read under
+// its own lock, so the snapshot is internally consistent per-component
+// but NOT transactional across them — a row appended between the head
+// read and the column-cardinality read can show up as head++ without
+// the corresponding bitmap delta. Acceptable for /api/debug/store; do
+// not use this for anything correctness-critical.
 func (s *Store) Snapshot() DebugSnapshot {
 	s.mu.RLock()
 	head, tail := s.head, s.tail
