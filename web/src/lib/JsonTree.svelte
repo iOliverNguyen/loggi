@@ -3,15 +3,20 @@
   import Self from "./JsonTree.svelte";
   import Icon from "./Icon.svelte";
 
-  let { value, path = [], onAddFilter, isPathFiltered, depth = 0 } = $props<{
+  let { value, path = [], onAddFilter, isPathFiltered, collapsedPaths = [], depth = 0 } = $props<{
     value: unknown;
     path?: string[];
     onAddFilter?: (p: string[], v: unknown, negate: boolean, op?: "eq" | "exists") => void;
     isPathFiltered?: (p: string[]) => boolean;
+    collapsedPaths?: string[];
     depth?: number;
   }>();
 
-  let collapsed = $state(untrack(() => depth >= 3));
+  let collapsed = $state(untrack(() => {
+    const here = path.join(".");
+    if (here && collapsedPaths.includes(here)) return true;
+    return depth >= 3;
+  }));
   let showFull = $state(false);
   const TRUNC = 200;
 
@@ -71,7 +76,7 @@
             <span class="text-violet-700 dark:text-violet-300 shrink-0">{k}</span>
             <span class="text-zinc-400 shrink-0">:</span>
             <div class="flex-1 min-w-0">
-              <Self value={v} path={childPath} {onAddFilter} {isPathFiltered} depth={depth + 1} />
+              <Self value={v} path={childPath} {onAddFilter} {isPathFiltered} {collapsedPaths} depth={depth + 1} />
             </div>
             {#if onAddFilter}
               <span class="opacity-0 group-hover:opacity-100 transition-opacity flex gap-0.5 shrink-0">

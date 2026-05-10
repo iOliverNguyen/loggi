@@ -19,11 +19,23 @@
   import FilterAutocomplete from "./lib/FilterAutocomplete.svelte";
   import SaveQuickModal from "./lib/SaveQuickModal.svelte";
   import SettingsModal from "./lib/SettingsModal.svelte";
-  import { requestSaveQuick, QUICK_PROMPT, persistQuickChips, DEFAULT_CHIPS } from "./lib/quick-filters";
-  import { parseClauses, withTimeRange, isSourceMuted, isSourceSoloed, setSourceMuted, setSourceSoloed } from "./lib/filter-dsl";
+  import {
+    requestSaveQuick,
+    QUICK_PROMPT,
+    QUICK_CHANGED,
+    persistQuickChips,
+    loadQuickChips,
+    setChipEnabled,
+    computeEffectiveFilter,
+    DEFAULT_CHIPS,
+    type QuickChip,
+  } from "./lib/quick-filters";
+  import { parseClauses, withTimeRange, isSourceMuted, isSourceSoloed, setSourceMuted, setSourceSoloed, setBareFields } from "./lib/filter-dsl";
   import Timeline from "./lib/Timeline.svelte";
   import LogRow from "./lib/LogRow.svelte";
   import ColumnsMenu from "./lib/ColumnsMenu.svelte";
+  import ColumnHeader from "./lib/ColumnHeader.svelte";
+  import { dismissOnOutside } from "./lib/dismissable";
   import { loadColumns, saveColumns, fromProfileIDs, toProfileIDs, type Column } from "./lib/columns";
   import {
     readSessionFromHash,
@@ -83,15 +95,15 @@
     // visible row drifts by ~clientHeight/2 * (newH/oldH - 1). Subtract
     // pinnedH symmetrically so a non-empty pinned section doesn't bias
     // the anchor by up to `pinnedEntries.length` rows.
-    const pinnedH = pinnedEl?.offsetHeight ?? 0;
+    const stuckH = (headerEl?.offsetHeight ?? 0) + (pinnedEl?.offsetHeight ?? 0);
     const anchorIdx = listEl
-      ? (listEl.scrollTop + listEl.clientHeight / 2 - pinnedH) / oldH
+      ? (listEl.scrollTop + listEl.clientHeight / 2 - stuckH) / oldH
       : 0;
     density = d;
     tick().then(() => {
       if (!listEl) return;
-      const ph = pinnedEl?.offsetHeight ?? 0;
-      listEl.scrollTop = anchorIdx * newH + ph - listEl.clientHeight / 2;
+      const sh = (headerEl?.offsetHeight ?? 0) + (pinnedEl?.offsetHeight ?? 0);
+      listEl.scrollTop = anchorIdx * newH + sh - listEl.clientHeight / 2;
     });
   }
 
@@ -119,6 +131,14 @@
   const MAX = 50000;
   let listEl: HTMLElement | null = $state(null);
   let pinnedEl: HTMLElement | null = $state(null);
+  let headerEl: HTMLElement | null = $state(null);
+  let headerH = $state(24);
+  $effect(() => {
+    if (!headerEl) return;
+    const ro = new ResizeObserver(() => { headerH = headerEl?.offsetHeight ?? 24; });
+    ro.observe(headerEl);
+    return () => ro.disconnect();
+  });
   let stickToBottom = $state(true);
   let historyLoading = $state(false);
   let historyExhausted = $state(false);
@@ -241,7 +261,7 @@
         historyLoading = false;
         bus!.send({
           type: "subscribe",
-          subscribe: { sub_id: SUB_ID, filter, history_n: INITIAL_HISTORY },
+          subscribe: { sub_id: SUB_ID, filter: effectiveFilterFor(filter), history_n: INITIAL_HISTORY },
         });
         // Tell the server which profile we're using so it can apply the
         // per-profile sources overlay. Sent on every (re)connect so the
@@ -290,7 +310,12 @@
         sources = sources.filter((s) => s.id !== ev.source_id);
         return;
       }
-      const idx = sources.findIndex((s) => s.id === ev.source_id);
+      // Match optimistic placeholders (negative id) by (kind, name) so
+      // they upgrade in place to the real server-assigned id.
+      let idx = sources.findIndex((s) => s.id === ev.source_id);
+      if (idx === -1) {
+        idx = sources.findIndex((s) => s.id < 0 && s.kind === ev.kind && s.name === ev.name);
+      }
       if (idx === -1) {
         sources = [
           ...sources,
@@ -299,6 +324,7 @@
       } else {
         sources[idx] = {
           ...sources[idx],
+          id: ev.source_id,
           state: ev.state,
           mode: ev.mode || sources[idx].mode,
           detail: ev.detail,
@@ -451,7 +477,10 @@
   }
 
   function pushFilterHistory(expr: string) {
-    const trimmed = expr.trim();
+    // Drop any timeline-driven `ts:[…]` clauses before recording: those
+    // come from brushing the timeline, not from the user typing, so they
+    // pollute the dedupe and never round-trip meaningfully.
+    const trimmed = withTimeRange(expr, null, null).trim();
     if (!trimmed) return;
     const next = [trimmed, ...filterHistory.filter((x) => x !== trimmed)].slice(0, FILTER_HISTORY_MAX);
     filterHistory = next;
@@ -460,20 +489,56 @@
     } catch {}
   }
 
+  // Quick chip state mirror — kept in sync via QUICK_CHANGED so the
+  // effective filter recomputes when the user toggles a pinned chip
+  // anywhere (sidebar, modal, etc.).
+  let quickChips = $state<QuickChip[]>(loadQuickChips());
+  $effect(() => {
+    const onChanged = () => (quickChips = loadQuickChips());
+    window.addEventListener(QUICK_CHANGED, onChanged);
+    return () => window.removeEventListener(QUICK_CHANGED, onChanged);
+  });
+
+  function effectiveFilterFor(working: string): string {
+    return computeEffectiveFilter(working, quickChips);
+  }
+
   function applyFilter() {
     filter = pendingFilter;
     localStorage.setItem("loggi.filter", filter);
     pushFilterHistory(filter);
-    bus?.send({ type: "filter", filter: { sub_id: SUB_ID, filter } });
+    sendFilter();
+  }
+
+  // sendFilter pushes the *effective* filter (pinned ANDed onto working)
+  // to the server and resets the streaming view. Called by applyFilter
+  // and by the pinned-chip toggle effect below.
+  function sendFilter() {
+    const eff = effectiveFilterFor(filter);
+    bus?.send({ type: "filter", filter: { sub_id: SUB_ID, filter: eff } });
     entries = [];
     dropped = 0;
     lastError = "";
-    // The server now resends a backlog after SetFilter, so the view will
-    // repopulate immediately. Reset the load-more sentinel so a long scroll
-    // can pull deeper history under the new filter.
     historyExhausted = false;
     historyLoading = false;
   }
+
+  // Re-send when pinned chip enable state changes. Skip the very first
+  // run so we don't double-send alongside the bus's own initial filter.
+  let chipApplyReady = false;
+  $effect(() => {
+    // Track the pinned-enabled signature so we only fire on real changes.
+    const sig = quickChips
+      .filter((c) => c.pinned)
+      .map((c) => `${c.label}:${c.enabled !== false ? 1 : 0}`)
+      .join("|");
+    void sig;
+    if (!chipApplyReady) {
+      chipApplyReady = true;
+      return;
+    }
+    sendFilter();
+  });
 
   function selectProfile(name: string) {
     activeProfile = name;
@@ -607,6 +672,25 @@
     applyFilter();
   }
 
+  function replaceFilterClause(clause: string) {
+    pendingFilter = clause;
+    applyFilter();
+  }
+
+  function filterOnlyClause(clause: string) {
+    // "Filter only by X": disable every pinned chip and set the working
+    // filter to `clause`, so the effective filter is exactly this clause.
+    // Pinned chips stay around for one-toggle restoration.
+    const next = quickChips.map((c) => (c.pinned ? { ...c, enabled: false } : c));
+    persistQuickChips(next);
+    pendingFilter = clause;
+    applyFilter();
+  }
+
+  let activeProfileCollapsed = $derived(
+    profiles.find((p) => p.name === activeProfile)?.collapsed_fields ?? [],
+  );
+
   let activeFilterFields = $derived.by(() => {
     const set = new Set<string>();
     const r = parseClauses(filter);
@@ -635,6 +719,7 @@
   $effect(() => {
     fetch("/api/columns").then((r) => r.json()).then((j) => {
       if (Array.isArray(j?.hot)) hotColumns = j.hot;
+      if (Array.isArray(j?.well_known)) setBareFields(j.well_known);
     }).catch(() => {});
   });
 
@@ -713,6 +798,11 @@
     return () => window.removeEventListener(QUICK_PROMPT, onPrompt);
   });
   let showExportMenu = $state(false);
+  let exportMenuEl: HTMLDivElement | null = $state(null);
+  $effect(() => {
+    if (!showExportMenu) return;
+    return dismissOnOutside(exportMenuEl, () => (showExportMenu = false));
+  });
   let showProfilesModal = $state(false);
   const iconBtnCls = "p-1.5 rounded bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300";
 
@@ -849,17 +939,17 @@
     // when checking whether the row is "above" the visible area.
     requestAnimationFrame(() => {
       if (!listEl) return;
-      const pinnedH = pinnedEl?.offsetHeight ?? 0;
-      const top = pinnedH + next * rowH;
+      const stuckH = (headerEl?.offsetHeight ?? 0) + (pinnedEl?.offsetHeight ?? 0);
+      const top = stuckH + next * rowH;
       const bot = top + rowH;
-      if (top < listEl.scrollTop + pinnedH) listEl.scrollTop = top - pinnedH;
+      if (top < listEl.scrollTop + stuckH) listEl.scrollTop = top - stuckH;
       else if (bot > listEl.scrollTop + listEl.clientHeight)
         listEl.scrollTop = bot - listEl.clientHeight;
     });
   }
   function onGlobalKey(e: KeyboardEvent) {
     // Always-fire bindings (work even when typing in inputs).
-    if ((e.metaKey || e.ctrlKey) && (e.key === "l" || e.key === "L")) {
+    if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === "l" || e.key === "L")) {
       e.preventDefault();
       copyShareURL();
       return;
@@ -959,19 +1049,23 @@
       }
       return;
     }
-    // Shift+1..9 applies the Nth saved quick filter (in display order).
+    // Shift+1..9 toggles the Nth pinned chip enabled. If there are fewer
+    // pinned chips than N, fall through to applying the Nth working chip.
     if (e.shiftKey && /^[!@#$%^&*(]$/.test(e.key)) {
-      // shift maps 1→! 2→@ 3→# 4→$ 5→% 6→^ 7→& 8→* 9→(
       const idx = "!@#$%^&*(".indexOf(e.key);
       if (idx >= 0) {
-        try {
-          const raw = localStorage.getItem("loggi.quick");
-          const chips = raw ? JSON.parse(raw) : [];
-          if (idx < chips.length) {
-            e.preventDefault();
-            quickLevel(chips[idx].expr);
-          }
-        } catch {}
+        const pinned = quickChips.filter((c) => c.pinned);
+        if (idx < pinned.length) {
+          e.preventDefault();
+          setChipEnabled(pinned[idx].label, pinned[idx].enabled === false);
+          return;
+        }
+        const working = quickChips.filter((c) => !c.pinned);
+        const wIdx = idx - pinned.length;
+        if (wIdx < working.length) {
+          e.preventDefault();
+          quickLevel(working[wIdx].expr);
+        }
       }
       return;
     }
@@ -1001,6 +1095,16 @@
   });
 
   function addSource(kind: "file" | "docker", name: string, args: Record<string, unknown>) {
+    // Optimistic placeholder so the sidebar reflects the click immediately.
+    // Negative id distinguishes it from server-assigned rows; the real
+    // `m.source` event matches by (kind, name) and replaces it.
+    if (!sources.some((s) => s.kind === kind && s.name === name)) {
+      const placeholderId = -Math.floor(Math.random() * 1_000_000) - 1;
+      sources = [
+        ...sources,
+        { id: placeholderId, kind, name, mode: "", state: "connecting" },
+      ];
+    }
     bus?.send({
       type: "add_source",
       add_source: { kind, name, args },
@@ -1059,10 +1163,19 @@
       </span>
       <input
         bind:this={filterInputEl}
-        class="w-full bg-zinc-100 dark:bg-zinc-900 pl-8 pr-3 py-1.5 rounded mono text-sm border border-transparent focus:border-sky-500 outline-none"
+        class="w-full bg-zinc-100 dark:bg-zinc-900 pl-8 {pendingFilter.trim() ? 'pr-8' : 'pr-3'} py-1.5 rounded mono text-sm border border-transparent focus:border-sky-500 outline-none"
         placeholder="filter — / to focus · Tab to autocomplete · ? for help"
         bind:value={pendingFilter}
         onkeydown={(e) => e.key === "Enter" && applyFilter()} />
+      {#if pendingFilter.trim()}
+        <button
+          class="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200"
+          title="Clear filter"
+          aria-label="clear filter"
+          onclick={() => { pendingFilter = ""; applyFilter(); filterInputEl?.focus(); }}>
+          <Icon name="x" size={14} />
+        </button>
+      {/if}
       <FilterAutocomplete
         inputEl={filterInputEl}
         value={pendingFilter}
@@ -1102,12 +1215,12 @@
     </button>
     <button
       class={iconBtnCls}
-      title="Copy share URL (⌘L)"
+      title="Copy share URL (⌘⇧L)"
       aria-label="share"
       onclick={copyShareURL}>
       <Icon name="link" size={16} />
     </button>
-    <div class="relative">
+    <div class="relative" bind:this={exportMenuEl}>
       <button
         class={iconBtnCls + " inline-flex items-center gap-0.5"}
         title="Export"
@@ -1121,7 +1234,6 @@
           class="absolute right-0 mt-1 w-52 rounded shadow-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 z-30 text-sm"
           role="menu"
           tabindex="-1"
-          onclick={(e) => e.stopPropagation()}
           onkeydown={(e) => e.key === "Escape" && (showExportMenu = false)}>
           <button class="block w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800"
                   onclick={() => downloadExport("jsonl")}>Download .jsonl</button>
@@ -1334,8 +1446,12 @@
       bind:this={listEl}
       onscroll={onScroll}
       class="flex-1 overflow-y-auto mono text-xs">
+      <div bind:this={headerEl} class="sticky top-0 z-20 bg-zinc-50 dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800">
+        <ColumnHeader {columns} {showTimestamps} />
+      </div>
       {#if pinnedEntries.length > 0}
-        <div bind:this={pinnedEl} class="sticky top-0 z-10 bg-amber-50 dark:bg-amber-950/60 border-b border-amber-300/40 dark:border-amber-700/40">
+        <div bind:this={pinnedEl} class="sticky z-10 bg-amber-50 dark:bg-amber-950/60 border-b border-amber-300/40 dark:border-amber-700/40"
+             style="top:{headerH}px">
           {#each pinnedEntries as p}
             <div class="relative pl-4 pr-3 py-1 hover:bg-amber-100/70 dark:hover:bg-amber-900/40 cursor-pointer flex gap-3 items-baseline"
                  role="button"
@@ -1422,7 +1538,8 @@
         {sources}
         onClose={closePanel}
         onAddFilter={addFilterClause}
-        {isPathFiltered} />
+        {isPathFiltered}
+        collapsedPaths={activeProfileCollapsed} />
     {/if}
   </div>
 
@@ -1451,6 +1568,7 @@
     initialName={activeProfile && profiles.some((p) => p.name === activeProfile) ? "" : activeProfile}
     initialFilter={filter}
     initialColumns={toProfileIDs(columns)}
+    initialCollapsed={activeProfileCollapsed}
     currentSources={sources.map((s) => ({ kind: s.kind, name: s.name }))}
     onClose={() => (showSaveProfile = false)}
     onSaved={async (name, path) => {
@@ -1475,6 +1593,8 @@
     y={ctxMenu.y}
     onClose={() => (ctxMenu = null)}
     onAddFilter={addFilterClause}
+    onReplaceFilter={replaceFilterClause}
+    onFilterOnly={filterOnlyClause}
     onTogglePin={() => togglePin(ctxMenu!.entry.seq)}
     onCopyMsg={() => copyEntryMsg(ctxMenu!.entry)}
     onCopyJSON={() => copyEntryJSON(ctxMenu!.entry)}
@@ -1506,12 +1626,14 @@
     {showQuickBar}
     {showTimestamps}
     {showTimeline}
+    {columns}
     profileNames={profiles.map((p) => p.name)}
     onChangeTheme={(t) => (theme = t)}
     onChangeDensity={(d) => setDensity(d)}
     onChangeShowQuickBar={(v) => (showQuickBar = v)}
     onChangeShowTimestamps={(v) => (showTimestamps = v)}
     onChangeShowTimeline={(v) => (showTimeline = v)}
+    onChangeColumns={onColumnsChange}
     onClearHistory={() => {
       filterHistory = [];
       try { localStorage.removeItem("loggi.filterHistory"); } catch {}

@@ -12,6 +12,7 @@
   //      ingested rows, prefixed with `@`.
 
   import { tick } from "svelte";
+  import { BARE_FIELDS as BARE_FIELDS_SET } from "./filter-dsl";
 
   type Suggestion = { text: string; kind: "field" | "value" | "history" };
 
@@ -31,7 +32,6 @@
     onChange: (v: string) => void;
   }>();
 
-  const BUILTINS = ["level", "msg", "ts", "service", "env", "version", "source", "caller", "callerFunc", "trace_id"];
   const LEVEL_VALUES = ["debug", "info", "warn", "warning", "error", "fatal"];
   const OPERATORS = [">=", ">", "<=", "<", "*", '"'];
 
@@ -98,11 +98,12 @@
       .slice(0, 5)
       .map((t: string) => ({ text: t, kind: "history" as const }));
 
+    const bareFields = [...BARE_FIELDS_SET];
     if (!word) {
       // Empty word at caret with non-empty input — show top-level field
       // names plus history hits.
       return [
-        ...BUILTINS.slice(0, 8).map((t) => ({ text: t, kind: "field" as const })),
+        ...bareFields.slice(0, 8).map((t) => ({ text: t, kind: "field" as const })),
         ...historyHits,
       ];
     }
@@ -113,7 +114,7 @@
       const prefix = word.startsWith("-") ? "-" : "";
       const stripped2 = stripped.startsWith("@") ? stripped.slice(1) : stripped;
       const fieldSuggs: Suggestion[] = [
-        ...BUILTINS.filter((f) => f.startsWith(stripped2.toLowerCase())).map((f) => ({ text: prefix + f, kind: "field" as const })),
+        ...bareFields.filter((f) => f.startsWith(stripped2.toLowerCase())).map((f) => ({ text: prefix + f, kind: "field" as const })),
         ...[...discoveredFields]
           .filter((f) => f.toLowerCase().includes(stripped2.toLowerCase()))
           .slice(0, 10)

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { tick } from "svelte";
   import Icon from "./Icon.svelte";
+  import ColumnReorderList from "./ColumnReorderList.svelte";
   import { type Column, BUILTINS } from "./columns";
 
   let {
@@ -26,26 +27,9 @@
     onChange(cols);
   }
 
-  function moveUp(i: number) {
-    if (i <= 0) return;
-    const next = [...columns];
-    [next[i - 1], next[i]] = [next[i], next[i - 1]];
-    patch(next);
-  }
-  function moveDown(i: number) {
-    if (i >= columns.length - 1) return;
-    const next = [...columns];
-    [next[i], next[i + 1]] = [next[i + 1], next[i]];
-    patch(next);
-  }
   function setVisible(i: number, v: boolean) {
     const next = [...columns];
     next[i] = { ...next[i], visible: v };
-    patch(next);
-  }
-  function setWidth(i: number, w: number) {
-    const next = [...columns];
-    next[i] = { ...next[i], width: w };
     patch(next);
   }
   function remove(i: number) {
@@ -117,41 +101,7 @@
       <p class="text-[10px] text-zinc-500">Column widths are saved per device; visibility and order follow your profile.</p>
       <section>
         <h3 class="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold mb-2">Active</h3>
-        <ul class="space-y-1">
-          {#each columns as c, i (c.id)}
-            <li class="flex items-center gap-1 text-xs">
-              <input type="checkbox"
-                     checked={c.visible}
-                     onchange={(e) => setVisible(i, (e.currentTarget as HTMLInputElement).checked)}
-                     aria-label={`toggle ${c.label}`} />
-              <span class="flex-1 truncate" class:opacity-50={!c.visible}>
-                <span class="font-mono text-[11px]">{c.id}</span>
-                {#if c.label !== c.id}<span class="text-zinc-500"> · {c.label}</span>{/if}
-              </span>
-              <input
-                type="number"
-                min="0"
-                max="800"
-                step="8"
-                class="w-16 px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-[11px] mono"
-                value={c.width}
-                title={c.width === 0 ? "flex (fills remaining space)" : `${c.width}px`}
-                onchange={(e) => setWidth(i, Number((e.currentTarget as HTMLInputElement).value) || 0)} />
-              <button class="p-1 text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 disabled:opacity-30"
-                      title="move up" disabled={i === 0} onclick={() => moveUp(i)}
-                      aria-label="move up">▲</button>
-              <button class="p-1 text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 disabled:opacity-30"
-                      title="move down" disabled={i === columns.length - 1} onclick={() => moveDown(i)}
-                      aria-label="move down">▼</button>
-              <button class="p-1 text-zinc-500 hover:text-rose-500 disabled:opacity-30"
-                      title={c.kind === "builtin" ? "hide" : "remove"}
-                      onclick={() => remove(i)}
-                      aria-label="remove">
-                <Icon name="x" size={12} />
-              </button>
-            </li>
-          {/each}
-        </ul>
+        <ColumnReorderList {columns} onChange={patch} onRemove={remove} />
       </section>
 
       <section>

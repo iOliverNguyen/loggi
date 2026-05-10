@@ -98,6 +98,14 @@ type LogBatch struct {
 
 // Entry is the wire shape of a stored log row. The server materializes from
 // columnar storage on send.
+//
+// Level/Service/Msg are promoted to top-level fields (rather than nested in
+// Fields) because every UI surface treats them specially — column rendering,
+// detail-panel header, level-class colorization. The wire schema mirrors
+// that bias: the four hottest fields ride at the top, anything else stays
+// in Fields and is parsed lazily by the client. Decoupled from store-side
+// `WellKnownHotFields` on purpose: storage layout can grow without
+// affecting the wire envelope.
 type Entry struct {
 	Seq      uint64          `json:"seq"`
 	Ts       float64         `json:"ts"`

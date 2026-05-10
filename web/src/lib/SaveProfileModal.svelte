@@ -4,6 +4,7 @@
     initialName = "",
     initialFilter = "",
     initialColumns = [],
+    initialCollapsed = [],
     currentSources = [],
     onClose,
     onSaved,
@@ -11,6 +12,7 @@
     initialName?: string;
     initialFilter?: string;
     initialColumns?: string[];
+    initialCollapsed?: string[];
     currentSources?: SourceRef[];
     onClose: () => void;
     onSaved: (name: string, path: string) => void;
@@ -47,7 +49,7 @@
           name: name.trim(),
           filter,
           columns: initialColumns,
-          collapsed_fields: [],
+          collapsed_fields: initialCollapsed,
           sources: bundledSources,
           destination: dest,
         }),

@@ -11,6 +11,7 @@
   let dialogEl: HTMLDivElement | null = $state(null);
   let inputEl: HTMLInputElement | null = $state(null);
   let label = $state("");
+  let pinned = $state(false);
   let error = $state("");
 
   $effect(() => {
@@ -25,7 +26,7 @@
   let exists = $derived(label.trim() !== "" && loadQuickChips().some((c) => c.label === label.trim()));
 
   function save() {
-    const r = commitQuickChip(label, expr);
+    const r = commitQuickChip(label, expr, pinned);
     if (!r.ok) {
       error = "name is required";
       return;
@@ -80,6 +81,13 @@
         <span class="text-xs text-zinc-500">Filter</span>
         <code class="mono text-[11px] block mt-0.5 px-2 py-1 rounded bg-zinc-100 dark:bg-zinc-800 break-all">{expr || "(no filter)"}</code>
       </div>
+      <label class="flex items-start gap-2 cursor-pointer">
+        <input type="checkbox" bind:checked={pinned} class="mt-0.5" />
+        <span class="text-xs">
+          <span class="font-medium">Pin</span>
+          <span class="text-zinc-500"> — pinned chips AND on top of the working filter; toggle them on/off without retyping.</span>
+        </span>
+      </label>
       {#if exists}
         <div class="text-amber-600 dark:text-amber-400 text-xs">⚠ A chip named &quot;{label.trim()}&quot; already exists. Saving will replace it.</div>
       {/if}

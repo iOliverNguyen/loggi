@@ -1,6 +1,9 @@
 package filter
 
-import "strings"
+import (
+	"regexp"
+	"strings"
+)
 
 // Node is a parsed filter expression. Walk via type switch in the evaluator.
 type Node interface {
@@ -64,6 +67,15 @@ type CmpStrNode struct {
 	V    string
 }
 
+// RegexNode matches Path's string value against a /pattern/flags literal.
+// Re is pre-compiled at parse time so bad regex errors surface up front.
+type RegexNode struct {
+	Path    []string
+	Pattern string
+	Flags   string
+	Re      *regexp.Regexp
+}
+
 func (*AndNode) node()     {}
 func (*OrNode) node()      {}
 func (*NotNode) node()     {}
@@ -73,6 +85,7 @@ func (*ExistsNode) node()  {}
 func (*RangeNode) node()   {}
 func (*CmpNumNode) node()  {}
 func (*CmpStrNode) node()  {}
+func (*RegexNode) node()   {}
 
 func (n *AndNode) String() string    { return "(" + n.L.String() + " AND " + n.R.String() + ")" }
 func (n *OrNode) String() string     { return "(" + n.L.String() + " OR " + n.R.String() + ")" }
@@ -96,6 +109,7 @@ func (n *ExistsNode) String() string { return joinPath(n.Path) + ":*" }
 func (n *RangeNode) String() string  { return joinPath(n.Path) + ":[range]" }
 func (n *CmpNumNode) String() string { return joinPath(n.Path) + ":" + n.Op }
 func (n *CmpStrNode) String() string { return joinPath(n.Path) + ":" + n.Op + n.V }
+func (n *RegexNode) String() string  { return joinPath(n.Path) + ":/" + n.Pattern + "/" + n.Flags }
 
 func joinPath(p []string) string {
 	if len(p) == 0 {

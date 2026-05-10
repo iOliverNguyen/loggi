@@ -271,3 +271,38 @@ func TestParens(t *testing.T) {
 	}
 	_ = fmt.Sprint("ok")
 }
+
+func TestRegex(t *testing.T) {
+	s := setup(t)
+	got, err := count(s, `msg:/dispatcher/`)
+	if err != nil {
+		t.Fatalf("regex error: %v", err)
+	}
+	if got != 1 {
+		t.Fatalf("msg:/dispatcher/ want 1 got %d", got)
+	}
+	got, err = count(s, `msg:/PANIC/i`)
+	if err != nil {
+		t.Fatalf("case-insensitive regex: %v", err)
+	}
+	if got != 1 {
+		t.Fatalf("msg:/PANIC/i want 1 got %d", got)
+	}
+	got, err = count(s, `service:/^batch_/`)
+	if err != nil {
+		t.Fatalf("service regex: %v", err)
+	}
+	if got != 1 {
+		t.Fatalf("service:/^batch_/ want 1 got %d", got)
+	}
+	got, err = count(s, `-msg:/timeout/`)
+	if err != nil {
+		t.Fatalf("negated regex: %v", err)
+	}
+	if got != 3 {
+		t.Fatalf("-msg:/timeout/ want 3 got %d", got)
+	}
+	if _, err := count(s, `msg:/[/`); err == nil {
+		t.Fatalf("expected bad-regex error for /[/")
+	}
+}

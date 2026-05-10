@@ -71,6 +71,12 @@ func (s *Server) runSession(ctx context.Context, conn Conn) {
 	// first, a concurrent broadcastSourceState (e.g. detectMode publishing
 	// "open" on first ingest) could slip a "source" frame in front of the
 	// snapshot — clients consume the first frame as a snapshot.
+	//
+	// Note: the snapshot is intentionally config-only (Sources + current
+	// store Head). Row data flows through per-subscriber channels created
+	// after registerSession; clients page in older rows via History RPC.
+	// Any rows appended between this Write and registerSession are picked
+	// up by the subscription's normal forward-fill — no replay gap.
 	_ = conn.Write(&wire.ServerMsg{
 		Type: wire.SMsgSnapshot,
 		Snapshot: &wire.Snapshot{

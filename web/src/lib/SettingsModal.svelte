@@ -2,6 +2,8 @@
   import { tick, onMount } from "svelte";
   import Icon from "./Icon.svelte";
   import AddSourceTabs from "./AddSourceTabs.svelte";
+  import ColumnReorderList from "./ColumnReorderList.svelte";
+  import type { Column } from "./columns";
 
   type Theme = "auto" | "light" | "dark";
   type Density = "compact" | "cozy" | "comfortable";
@@ -14,11 +16,13 @@
     showTimestamps,
     showTimeline,
     profileNames = [],
+    columns,
     onChangeTheme,
     onChangeDensity,
     onChangeShowQuickBar,
     onChangeShowTimestamps,
     onChangeShowTimeline,
+    onChangeColumns,
     onClearHistory,
     onClearQuickChips,
     onClearLocal,
@@ -31,11 +35,13 @@
     showTimestamps: boolean;
     showTimeline: boolean;
     profileNames?: string[];
+    columns: Column[];
     onChangeTheme: (t: Theme) => void;
     onChangeDensity: (d: Density) => void;
     onChangeShowQuickBar: (v: boolean) => void;
     onChangeShowTimestamps: (v: boolean) => void;
     onChangeShowTimeline: (v: boolean) => void;
+    onChangeColumns: (cols: Column[]) => void;
     onClearHistory: () => void;
     onClearQuickChips: () => void;
     onClearLocal: () => void;
@@ -268,6 +274,14 @@
             <input type="checkbox" checked={showTimeline} onchange={(e) => onChangeShowTimeline((e.currentTarget as HTMLInputElement).checked)} />
           </label>
         </div>
+      </section>
+
+      <section>
+        <h3 class="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold mb-2 inline-flex items-center gap-2">
+          <Icon name="columns" size={12} /> Columns
+        </h3>
+        <p class="text-[10px] text-zinc-500 mb-2">Drag the grip to reorder, toggle to hide, or set a width (0 = flex).</p>
+        <ColumnReorderList {columns} onChange={onChangeColumns} />
       </section>
 
       <section>

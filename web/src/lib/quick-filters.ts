@@ -2,7 +2,15 @@
 // of the UI (e.g. the sidebar's "save" button) can persist a chip
 // without going through the QuickFilters component itself.
 
-export type QuickChip = { label: string; expr: string };
+// QuickChip is a named filter snippet. `pinned` chips AND on top of the
+// working filter and have an `enabled` toggle (default true). Plain chips
+// are one-click apply-as-working-filter.
+export type QuickChip = {
+  label: string;
+  expr: string;
+  pinned?: boolean;
+  enabled?: boolean;
+};
 
 const KEY = "loggi.quick";
 
@@ -23,11 +31,38 @@ export function loadQuickChips(): QuickChip[] {
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed) && parsed.every((x: any) => typeof x?.label === "string" && typeof x?.expr === "string")) {
-        return parsed;
+        return parsed.map((x: any) => ({
+          label: x.label,
+          expr: x.expr,
+          pinned: x.pinned === true,
+          enabled: x.enabled !== false,
+        }));
       }
     }
   } catch {}
-  return DEFAULT_CHIPS;
+  return DEFAULT_CHIPS.map((c) => ({ ...c, pinned: false, enabled: true }));
+}
+
+export function setChipPinned(label: string, pinned: boolean): void {
+  persistQuickChips(loadQuickChips().map((c) => (c.label === label ? { ...c, pinned } : c)));
+}
+
+export function setChipEnabled(label: string, enabled: boolean): void {
+  persistQuickChips(loadQuickChips().map((c) => (c.label === label ? { ...c, enabled } : c)));
+}
+
+// computeEffectiveFilter ANDs all enabled pinned chips on top of the
+// working filter. Whitespace is the implicit AND in the DSL.
+export function computeEffectiveFilter(working: string, chips: QuickChip[]): string {
+  const parts: string[] = [];
+  for (const c of chips) {
+    if (!c.pinned || c.enabled === false) continue;
+    const e = c.expr.trim();
+    if (e) parts.push(`(${e})`);
+  }
+  const w = working.trim();
+  if (w) parts.push(`(${w})`);
+  return parts.join(" ");
 }
 
 export function persistQuickChips(chips: QuickChip[]): void {
@@ -50,14 +85,14 @@ export function requestSaveQuick(expr: string): void {
 
 // commitQuickChip writes a chip; called by the save dialog after the
 // user picks a label. Returns whether an existing chip was replaced.
-export function commitQuickChip(label: string, expr: string): { ok: boolean; replaced: boolean } {
+export function commitQuickChip(label: string, expr: string, pinned = false): { ok: boolean; replaced: boolean } {
   const trimmed = label.trim();
   if (!trimmed) return { ok: false, replaced: false };
   const chips = loadQuickChips();
   if (chips.some((c) => c.label === trimmed)) {
-    persistQuickChips(chips.map((c) => (c.label === trimmed ? { label: trimmed, expr } : c)));
+    persistQuickChips(chips.map((c) => (c.label === trimmed ? { label: trimmed, expr, pinned, enabled: true } : c)));
     return { ok: true, replaced: true };
   }
-  persistQuickChips([...chips, { label: trimmed, expr }]);
+  persistQuickChips([...chips, { label: trimmed, expr, pinned, enabled: true }]);
   return { ok: true, replaced: false };
 }

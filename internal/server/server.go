@@ -251,9 +251,15 @@ func (s *Server) Start() error {
 
 // applyAutostart launches each Sources.Autostart entry. Failures log and
 // continue so a stale config (e.g. removed file path, container that no
-// longer exists) doesn't prevent the server from coming up.
+// longer exists) doesn't prevent the server from coming up. Bails when
+// s.ctx is cancelled so a Shutdown mid-startup doesn't keep dialing.
 func (s *Server) applyAutostart() {
 	for _, ref := range s.opts.Autostart {
+		select {
+		case <-s.ctx.Done():
+			return
+		default:
+		}
 		if _, err := s.startAutostartRef(ref); err != nil {
 			s.logger.Printf("autostart skip %s/%s: %v", ref.Kind, ref.Name, err)
 		}

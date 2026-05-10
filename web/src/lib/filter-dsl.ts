@@ -17,17 +17,25 @@ export type ClauseOp =
   | "lte"
   | "range"
   | "exists"
-  | "nexists";
+  | "nexists"
+  | "regex"
+  | "nregex";
 
 export interface Clause {
   field: string; // dotted path: "level", "service", "user.id"
   op: ClauseOp;
   value: string; // for "range": "lo..hi"
+  flags?: string; // for "regex"/"nregex": optional /pat/flags
 }
 
-// Built-in top-level fields the parser/compiler treats as bare identifiers
-// (no @ prefix). Anything else with a dot is rendered as @a.b.c.
-const BUILTIN_FIELDS = new Set([
+// Well-known top-level fields the parser/compiler treats as bare
+// identifiers (no @ prefix). Anything else with a dot is rendered as
+// @a.b.c. Distinct from the 5-item UI builtins in `columns.ts`.
+//
+// The list is mutable so the boot path can replace it with the
+// authoritative `well_known` array from `/api/columns`. The hardcoded
+// values are a sensible pre-fetch default.
+export const BARE_FIELDS = new Set<string>([
   "level",
   "msg",
   "ts",
@@ -39,6 +47,15 @@ const BUILTIN_FIELDS = new Set([
   "callerFunc",
   "trace_id",
 ]);
+
+export function setBareFields(fields: string[]): void {
+  BARE_FIELDS.clear();
+  // ts and source are always bare (synthetic UI fields), regardless of
+  // what the server reports as pre-allocated hot columns.
+  BARE_FIELDS.add("ts");
+  BARE_FIELDS.add("source");
+  for (const f of fields) BARE_FIELDS.add(f);
+}
 
 function fieldRef(field: string): string {
   if (field.includes(".")) return "@" + field;
@@ -81,6 +98,10 @@ function renderValue(op: ClauseOp, v: string): string {
     case "exists":
     case "nexists":
       return "*";
+    case "regex":
+    case "nregex":
+      // value is the bare pattern (no slashes); flags are the trailing chars.
+      return `/${v.replace(/\//g, "\\/")}/`;
   }
 }
 
@@ -90,8 +111,10 @@ export function clauseToTerm(c: Clause): string {
     const inner = `*${c.value.replace(/\s/g, "")}*`;
     return c.op === "ncontains" ? `-${inner}` : inner;
   }
-  const term = `${fieldRef(c.field)}:${renderValue(c.op, c.value)}`;
-  if (c.op === "neq" || c.op === "ncontains" || c.op === "nexists") return `-${term}`;
+  let rendered = renderValue(c.op, c.value);
+  if ((c.op === "regex" || c.op === "nregex") && c.flags) rendered += c.flags;
+  const term = `${fieldRef(c.field)}:${rendered}`;
+  if (c.op === "neq" || c.op === "ncontains" || c.op === "nexists" || c.op === "nregex") return `-${term}`;
   return term;
 }
 
@@ -169,6 +192,17 @@ function unquote(v: string): string {
   return v;
 }
 
+function parseRegexLiteral(value: string): { pattern: string; flags: string } | null {
+  if (value.length < 2 || value[0] !== "/") return null;
+  let end = value.length;
+  while (end > 1 && (value[end - 1] === "i" || value[end - 1] === "g")) end--;
+  if (end <= 1 || value[end - 1] !== "/") return null;
+  const flags = value.slice(end);
+  const body = value.slice(1, end - 1);
+  if (body === "") return null;
+  return { pattern: body.replace(/\\\//g, "/"), flags };
+}
+
 function parseTerm(raw: string): Clause | null {
   let negate = false;
   let s = raw;
@@ -200,6 +234,21 @@ function parseTerm(raw: string): Clause | null {
   const value = s.slice(colon + 1);
   if (field.startsWith("@")) field = field.slice(1);
   if (!field) return null;
+
+  // Regex literal: /pattern/flags. Pattern body may contain `\/` to escape
+  // a literal slash; we don't decode that here (round-trips back via the
+  // server-side parser).
+  {
+    const rx = parseRegexLiteral(value);
+    if (rx) {
+      return {
+        field,
+        op: negate ? "nregex" : "regex",
+        value: rx.pattern,
+        flags: rx.flags,
+      };
+    }
+  }
 
   // Range: [lo..hi]
   if (value.startsWith("[") && value.endsWith("]")) {
@@ -259,6 +308,8 @@ export const OP_LABELS: Record<ClauseOp, string> = {
   range: "in [a..b]",
   exists: "is set",
   nexists: "not set",
+  regex: "matches /…/",
+  nregex: "!matches /…/",
 };
 
 export function defaultOpsForField(field: string): ClauseOp[] {
@@ -269,10 +320,8 @@ export function defaultOpsForField(field: string): ClauseOp[] {
   if (field === "ts") {
     return ["range", "gte", "gt", "lte", "lt", "exists", "nexists"];
   }
-  return ["eq", "neq", "contains", "ncontains", "exists", "nexists"];
+  return ["eq", "neq", "contains", "ncontains", "regex", "nregex", "exists", "nexists"];
 }
-
-export { BUILTIN_FIELDS };
 
 // Source mute / solo helpers — used by the sidebar M/S toggles.
 //

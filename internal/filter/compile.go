@@ -46,8 +46,20 @@ func compile(n Node, s *store.Store) store.EvalFn {
 		return compileCmpNum(x, s)
 	case *CmpStrNode:
 		return compileCmpStr(x, s)
+	case *RegexNode:
+		return compileRegex(x, s)
 	}
 	return func(uint64) bool { return false }
+}
+
+func compileRegex(n *RegexNode, s *store.Store) store.EvalFn {
+	re := n.Re
+	if re == nil {
+		return func(uint64) bool { return false }
+	}
+	return func(seq uint64) bool {
+		return re.MatchString(materializeField(s, seq, n.Path))
+	}
 }
 
 func compileEq(n *EqNode, s *store.Store) store.EvalFn {

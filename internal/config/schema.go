@@ -52,14 +52,10 @@ type SourceDefaults struct {
 }
 
 type Profile struct {
-	Name            string        `toml:"name"`
-	Filter          string        `toml:"filter"`
-	Columns         []string      `toml:"columns"`
-	CollapsedFields []string      `toml:"collapsed_fields"`
-	// TODO: SavedFilters is in the schema but no UI consumer reads/writes
-	// it yet. Either wire it up or drop it; left in place because tests
-	// already cover it.
-	SavedFilters []SavedFilter `toml:"saved_filters"`
+	Name            string   `toml:"name"`
+	Filter          string   `toml:"filter"`
+	Columns         []string `toml:"columns"`
+	CollapsedFields []string `toml:"collapsed_fields"`
 	// Sources is the per-profile overlay applied on activation. Server's
 	// ActivateProfile diffs against what the previous profile declared
 	// (NOT current live sources): refs unique to the previous profile
@@ -69,11 +65,6 @@ type Profile struct {
 	// SaveProfileModal "Include current sources" checkbox controls whether
 	// the UI bundles the live (kind, name) pairs into this field on save.
 	Sources []SourceRef `toml:"sources,omitempty"`
-}
-
-type SavedFilter struct {
-	Name string `toml:"name"`
-	Expr string `toml:"expr"`
 }
 
 // Defaults returns a config preloaded with sensible defaults.

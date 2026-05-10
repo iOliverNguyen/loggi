@@ -66,14 +66,18 @@
     error = "";
     try {
       // If renaming, delete the old one after the new one saves successfully.
+      // Preserve existing per-profile collapsed_fields/columns/sources on
+      // edit; the modal only re-edits name + filter.
+      const original = profiles.find((p: Profile) => p.name === editing!.originalName);
       const r = await fetch("/api/profiles", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: trimmed,
           filter: editing.filter,
-          columns: [],
-          collapsed_fields: [],
+          columns: original?.columns ?? [],
+          collapsed_fields: original?.collapsed_fields ?? [],
+          sources: original?.sources ?? [],
           destination: editing.dest,
         }),
       });

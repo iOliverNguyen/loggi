@@ -48,13 +48,13 @@
     { keys: ["Enter"], label: "open detail panel" },
     { keys: ["Space"], label: "pause / resume" },
     { keys: ["right-click"], label: "row context menu (↑↓ to navigate, Enter to fire)" },
-    { keys: ["⌘L"], label: "copy share URL" },
+    { keys: ["⌘⇧L"], label: "copy share URL" },
     { keys: ["⌘C"], label: "copy selected rows as JSONL" },
     { keys: ["p"], label: "pin / unpin row" },
     { keys: ["d"], label: "diff 2 selected rows" },
     { keys: ["⌘click", "⇧click"], label: "multi-select" },
     { keys: ["⌥1", "⌥9"], label: "switch profile by index" },
-    { keys: ["⇧1", "⇧9"], label: "apply Nth saved quick filter" },
+    { keys: ["⇧1", "⇧9"], label: "toggle Nth pinned chip (or apply Nth working chip)" },
     { keys: ["←", "→"], label: "switch tabs (in modals / source picker)" },
     { keys: ["?"], label: "this overlay" },
   ];
@@ -81,6 +81,16 @@
         { e: "-*health*", d: "negated substring on msg" },
         { e: 'msg:"*timeout*"', d: "glob inside a quoted string (preserves spaces)" },
         { e: 'msg:"\\*"', d: "literal asterisk via \\*" },
+      ],
+    },
+    {
+      title: "Regex",
+      rows: [
+        { e: "msg:/error\\d+/", d: "regex match on msg (Go RE2 syntax)" },
+        { e: "msg:/PANIC/i", d: "case-insensitive flag" },
+        { e: "service:/^batch_/", d: "anchored prefix" },
+        { e: "-msg:/timeout/", d: "negate a regex" },
+        { e: "msg:/foo\\/bar/", d: "literal slash via \\/" },
       ],
     },
     {

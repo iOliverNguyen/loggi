@@ -14,6 +14,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/iOliverNguyen/loggi/internal/config"
 	"github.com/iOliverNguyen/loggi/internal/source/docker"
+	"github.com/iOliverNguyen/loggi/internal/store"
 	"github.com/iOliverNguyen/loggi/internal/wire"
 )
 
@@ -409,13 +410,17 @@ func (s *Server) handleSourceRemove(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
 }
 
-// handleAPIColumns returns the names of currently-promoted hot columns. The
-// filter builder UI uses this to populate the column dropdown alongside its
-// built-ins (level, msg, source, etc.).
+// handleAPIColumns returns:
+//   - `hot`: names of currently-promoted hot columns (live snapshot)
+//   - `well_known`: pre-allocated hot field names — the canonical list
+//     of fields the parser/autocomplete should treat as bare identifiers
+//
+// The frontend reads `well_known` instead of carrying a duplicate copy.
 func (s *Server) handleAPIColumns(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"hot": s.store.HotColumnNames(),
+		"hot":        s.store.HotColumnNames(),
+		"well_known": store.WellKnownHotFields,
 	})
 }
 

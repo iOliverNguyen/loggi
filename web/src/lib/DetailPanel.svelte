@@ -3,12 +3,13 @@
   import { ansiToHTML } from "./ansi";
   import JsonTree from "./JsonTree.svelte";
 
-  let { entry, sources, onClose, onAddFilter, isPathFiltered } = $props<{
+  let { entry, sources, onClose, onAddFilter, isPathFiltered, collapsedPaths = [] } = $props<{
     entry: Entry;
     sources: SourceInfo[];
     onClose: () => void;
     onAddFilter: (clause: string) => void;
     isPathFiltered?: (p: string[]) => boolean;
+    collapsedPaths?: string[];
   }>();
 
   let width = $state(parseInt(localStorage.getItem("loggi.panel.width") ?? "480", 10));
@@ -201,7 +202,7 @@
       <section>
         <h3 class="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold mb-1">Fields</h3>
         <div class="bg-zinc-50 dark:bg-zinc-900 rounded p-2 overflow-x-auto">
-          <JsonTree value={entry.fields} onAddFilter={onAddField} {isPathFiltered} depth={1} />
+          <JsonTree value={entry.fields} onAddFilter={onAddField} {isPathFiltered} {collapsedPaths} depth={1} />
         </div>
       </section>
     {/if}

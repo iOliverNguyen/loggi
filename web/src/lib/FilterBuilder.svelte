@@ -7,6 +7,7 @@
     OP_LABELS,
     defaultOpsForField,
   } from "./filter-dsl";
+  import { BUILTINS as COLUMN_BUILTINS } from "./columns";
   import Icon from "./Icon.svelte";
   import Combobox from "./Combobox.svelte";
 
@@ -25,7 +26,8 @@
   }>();
 
   // Built-in fields the server treats specially or always exposes.
-  const BUILTINS = ["level", "msg", "source", "service", "ts"];
+  // Source of truth lives in `columns.ts`.
+  const BUILTINS = Object.keys(COLUMN_BUILTINS);
 
   let hotColumns = $state<string[]>([]);
 

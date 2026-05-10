@@ -20,6 +20,7 @@ package filter
 
 import (
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"unicode"
@@ -139,6 +140,23 @@ func (p *parser) tokenize() {
 			}
 			p.toks = append(p.toks, token{kind: tDot, text: ".", pos: i})
 			i++
+			continue
+		case '/':
+			// Regex literal `/pattern/flags` — only in value position so a
+			// stray `/` elsewhere stays a glob char. Greedy: scan for the
+			// closing `/` (skipping `\/`), then absorb trailing [ig]+ flags.
+			// Falls through to glob-run if no closing slash is found, which
+			// keeps a single bare `/` working as a substring char.
+			if p.expectingValue() {
+				if end, ok := scanRegexLiteral(s, i); ok {
+					p.toks = append(p.toks, token{kind: tStar, text: s[i:end], pos: i})
+					i = end
+					continue
+				}
+			}
+			j := consumeGlobRun(s, i)
+			p.toks = append(p.toks, token{kind: tStar, text: s[i:j], pos: i})
+			i = j
 			continue
 		case '>', '<':
 			// tCmp only when in a value position (after `:`) AND followed
@@ -598,6 +616,17 @@ func (p *parser) parseFieldValue(path []string) (Node, error) {
 		return nil, fmt.Errorf("filter: bad value after %s", t.text)
 	case tString, tIdent, tStar, tNumber:
 		p.advance()
+		// Regex literal: /pattern/flags. Detected on tStar tokens that
+		// start with `/` and end with a `/` plus optional ig flags.
+		if t.kind == tStar {
+			if pat, flags, ok := splitRegexLiteral(t.text); ok {
+				re, err := compileRegexLiteral(pat, flags)
+				if err != nil {
+					return nil, fmt.Errorf("filter: bad regex /%s/%s: %v", pat, flags, err)
+				}
+				return &RegexNode{Path: path, Pattern: pat, Flags: flags, Re: re}, nil
+			}
+		}
 		// Quoted strings can carry a glob pattern (item 4): `key:"*foo*"`
 		// → glob substring with `\*` literal-escape support.
 		if t.kind == tString && t.parts != nil {
@@ -628,4 +657,73 @@ func (p *parser) expectNumber() (float64, error) {
 	}
 	p.advance()
 	return t.num, nil
+}
+
+// scanRegexLiteral returns the end index past a `/pattern/flags` literal
+// starting at `s[i]` (which must be `/`). Returns ok=false when no closing
+// `/` is found before a space, so a stray bare `/` falls back to a glob.
+func scanRegexLiteral(s string, i int) (int, bool) {
+	if i >= len(s) || s[i] != '/' {
+		return 0, false
+	}
+	j := i + 1
+	for j < len(s) {
+		c := s[j]
+		if isSpace(c) {
+			return 0, false
+		}
+		if c == '\\' && j+1 < len(s) {
+			j += 2
+			continue
+		}
+		if c == '/' {
+			j++
+			for j < len(s) && (s[j] == 'i' || s[j] == 'g') {
+				j++
+			}
+			return j, true
+		}
+		j++
+	}
+	return 0, false
+}
+
+// splitRegexLiteral recognizes `/pattern/flags` where flags is "", "i", "g",
+// or any combination of those. Returns (pattern, flags, true) on match. Only
+// the trailing `/` followed by flag chars closes the literal; embedded `/`
+// can be escaped with `\/` and is unescaped in the returned pattern.
+func splitRegexLiteral(tok string) (pattern, flags string, ok bool) {
+	if len(tok) < 2 || tok[0] != '/' {
+		return "", "", false
+	}
+	// Find the trailing `/flags` suffix. Walk from the end.
+	end := len(tok)
+	for end > 1 {
+		c := tok[end-1]
+		if c == 'i' || c == 'g' {
+			end--
+			continue
+		}
+		break
+	}
+	if end <= 1 || tok[end-1] != '/' {
+		return "", "", false
+	}
+	flags = tok[end:]
+	body := tok[1 : end-1]
+	if body == "" {
+		return "", "", false
+	}
+	// Unescape `\/` → `/`.
+	pattern = strings.ReplaceAll(body, `\/`, `/`)
+	return pattern, flags, true
+}
+
+func compileRegexLiteral(pattern, flags string) (*regexp.Regexp, error) {
+	pat := pattern
+	if strings.Contains(flags, "i") {
+		pat = "(?i)" + pat
+	}
+	// `g` is a JS-only "find all" flag; harmless for MatchString.
+	return regexp.Compile(pat)
 }

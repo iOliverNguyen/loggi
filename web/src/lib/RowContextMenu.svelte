@@ -17,6 +17,8 @@
     y,
     onClose,
     onAddFilter,
+    onReplaceFilter,
+    onFilterOnly,
     onTogglePin,
     onCopyMsg,
     onCopyJSON,
@@ -34,6 +36,8 @@
     y: number;
     onClose: () => void;
     onAddFilter: (clause: string) => void;
+    onReplaceFilter: (clause: string) => void;
+    onFilterOnly: (clause: string) => void;
     onTogglePin: () => void;
     onCopyMsg: () => void;
     onCopyJSON: () => void;
@@ -126,31 +130,36 @@
 
   <div class="border-t border-zinc-200 dark:border-zinc-800 my-1"></div>
 
-  <button class="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 inline-flex items-center gap-2"
-          onclick={() => fire(() => onAddFilter(`source:${quoteIfNeeded(sourceName)}`))}>
-    <Icon name="filter" size={12} class="opacity-60" />
-    Filter to <span class="mono truncate max-w-[140px]">{sourceName}</span>
-  </button>
+  {#snippet filterRow(clause: string, label: string, value?: string)}
+    <div class="filter-row group flex items-stretch hover:bg-zinc-100 dark:hover:bg-zinc-800">
+      <button class="flex-1 text-left px-3 py-1.5 inline-flex items-center gap-2"
+              title="Add this clause to the current filter"
+              onclick={() => fire(() => onAddFilter(clause))}>
+        <Icon name="filter" size={12} class="opacity-60" />
+        {label}{#if value}: <span class="mono truncate max-w-[140px]">{value}</span>{/if}
+      </button>
+      <button class="opacity-0 group-hover:opacity-100 px-2 text-zinc-500 hover:text-sky-600 dark:hover:text-sky-400"
+              title="Replace working filter with this clause"
+              onclick={() => fire(() => onReplaceFilter(clause))}>
+        <Icon name="refresh" size={12} />
+      </button>
+      <button class="opacity-0 group-hover:opacity-100 px-2 text-zinc-500 hover:text-amber-600 dark:hover:text-amber-400"
+              title="Filter only by this — clears working filter and disables pinned"
+              onclick={() => fire(() => onFilterOnly(clause))}>
+        <Icon name="star" size={12} />
+      </button>
+    </div>
+  {/snippet}
+
+  {@render filterRow(`source:${quoteIfNeeded(sourceName)}`, "Filter to", sourceName)}
   {#if entry.level}
-    <button class="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 inline-flex items-center gap-2"
-            onclick={() => fire(() => onAddFilter(`level:${entry.level}`))}>
-      <Icon name="filter" size={12} class="opacity-60" />
-      Filter level: {entry.level}
-    </button>
+    {@render filterRow(`level:${entry.level}`, "Filter level", entry.level)}
   {/if}
   {#if entry.service}
-    <button class="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 inline-flex items-center gap-2"
-            onclick={() => fire(() => onAddFilter(`service:${quoteIfNeeded(entry.service ?? "")}`))}>
-      <Icon name="filter" size={12} class="opacity-60" />
-      Filter service: {entry.service}
-    </button>
+    {@render filterRow(`service:${quoteIfNeeded(entry.service ?? "")}`, "Filter service", entry.service)}
   {/if}
   {#if traceID}
-    <button class="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 inline-flex items-center gap-2"
-            onclick={() => fire(() => onAddFilter(`trace_id:${quoteIfNeeded(String(traceID))}`))}>
-      <Icon name="filter" size={12} class="opacity-60" />
-      Show this trace
-    </button>
+    {@render filterRow(`trace_id:${quoteIfNeeded(String(traceID))}`, "Show this trace")}
   {/if}
 
   <div class="border-t border-zinc-200 dark:border-zinc-800 my-1"></div>

@@ -111,7 +111,9 @@ func New(opts Options) *Store {
 	// ts column always hot.
 	s.hot["ts"] = newColumn("ts", ColF64, cap)
 	// Pre-allocate the most common hot columns; they get filled lazily.
-	for _, k := range []string{"level", "service", "env", "version", "msg", "caller", "callerFunc", "trace_id"} {
+	// `source` is rendered as a UI column too, but synthesized from
+	// SourceID at materialize time — not pre-allocated here.
+	for _, k := range WellKnownHotFields {
 		kind := ColDict
 		if k == "msg" {
 			kind = ColDict // msg also dict-encoded; high cardinality triggers Raw promotion
@@ -119,6 +121,13 @@ func New(opts Options) *Store {
 		s.hot[k] = newColumn(k, kind, cap)
 	}
 	return s
+}
+
+// WellKnownHotFields is the set of pre-allocated hot column names. The
+// HTTP `/api/columns` handler exposes this so the frontend doesn't need
+// to hard-code a parallel list.
+var WellKnownHotFields = []string{
+	"level", "service", "env", "version", "msg", "caller", "callerFunc", "trace_id",
 }
 
 func nextPow2(n uint64) uint64 {

@@ -50,6 +50,7 @@ export interface Profile {
   name: string;
   filter: string;
   columns?: string[];
+  collapsed_fields?: string[];
   sources?: SourceRef[];
 }
 
