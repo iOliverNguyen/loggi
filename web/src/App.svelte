@@ -680,6 +680,10 @@
   }
   function addFilterClause(clause: string) {
     const next = pendingFilter.trim();
+    if (next && next.split(/\s+/).includes(clause)) {
+      applyFilter();
+      return;
+    }
     pendingFilter = next ? `${next} ${clause}` : clause;
     applyFilter();
   }
@@ -1589,6 +1593,7 @@
         {sources}
         onClose={closePanel}
         onAddFilter={addFilterClause}
+        onReplaceFilter={filterOnlyClause}
         {isPathFiltered}
         collapsedPaths={activeProfileCollapsed}
         onToggleCollapsedPath={toggleCollapsedPath} />

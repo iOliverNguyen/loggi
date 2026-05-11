@@ -72,6 +72,19 @@ export function persistQuickChips(chips: QuickChip[]): void {
   window.dispatchEvent(new CustomEvent(QUICK_CHANGED));
 }
 
+// resetWorkingChips replaces all non-pinned chips with DEFAULT_CHIPS,
+// preserving any pinned chips. Defaults whose labels collide with
+// existing pinned chips are skipped to avoid duplicate-label state.
+export function resetWorkingChips(): void {
+  const chips = loadQuickChips();
+  const pinned = chips.filter((c) => c.pinned);
+  const taken = new Set(pinned.map((c) => c.label));
+  const defaults = DEFAULT_CHIPS
+    .filter((c) => !taken.has(c.label))
+    .map((c) => ({ ...c, pinned: false, enabled: true }));
+  persistQuickChips([...pinned, ...defaults]);
+}
+
 // QUICK_PROMPT is dispatched on `window` to open the save-as-quick
 // dialog. The detail carries the expression to be saved.
 export const QUICK_PROMPT = "loggi:save-quick-prompt";

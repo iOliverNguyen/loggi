@@ -155,6 +155,41 @@
     if (c.id === "ts" && !showTimestamps) return false;
     return true;
   }
+
+  function nextVisibleAfter(i: number): Column | null {
+    for (let j = i + 1; j < columns.length; j++) {
+      if (shouldRender(columns[j])) return columns[j];
+    }
+    return null;
+  }
+
+  // Resize the column AFTER msg, anchored to msg's right edge. Mirrors
+  // onResizeDown but the move handler treats dx as a left-edge drag on the
+  // target — dragging right shrinks the next column, dragging left grows it.
+  function onResizeNextDown(e: PointerEvent, c: Column) {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    e.preventDefault();
+    resizeId = c.id;
+    resizeStartX = e.clientX;
+    resizeStartW = c.width || 120;
+    resizeLiveWidth = resizeStartW;
+    window.addEventListener("pointermove", onResizeNextMove);
+    window.addEventListener("pointerup", onResizeNextUp, { once: true });
+  }
+
+  function onResizeNextMove(e: PointerEvent) {
+    if (resizeId == null) return;
+    const w = Math.max(24, Math.round(resizeStartW - (e.clientX - resizeStartX)));
+    resizeLiveWidth = w;
+    const next = columns.map((c: Column) => (c.id === resizeId ? { ...c, width: w } : c));
+    onChange?.(next);
+  }
+
+  function onResizeNextUp() {
+    window.removeEventListener("pointermove", onResizeNextMove);
+    resizeId = null;
+  }
 </script>
 
 <div
@@ -183,13 +218,33 @@
         {#if onChange && !isFlex}
           <!-- svelte-ignore a11y_no_static_element_interactions -->
           <div
-            class="absolute top-0 right-0 h-full w-1.5 cursor-col-resize bg-transparent hover:bg-sky-400/60"
+            class="absolute top-0 right-0 h-full w-1.5 cursor-col-resize
+                   after:absolute after:top-1 after:bottom-1 after:right-0.5 after:w-px
+                   after:bg-zinc-300 dark:after:bg-zinc-700
+                   hover:bg-sky-400/60 hover:after:bg-transparent"
             class:bg-sky-500={resizeId === c.id}
             onpointerdown={(e) => onResizeDown(e, c)}
             ondblclick={(e) => onResizeDblClick(e, c)}
             title="drag to resize · double-click to reset"
             aria-hidden="true">
           </div>
+        {/if}
+        {#if onChange && isFlex}
+          {@const nextC = nextVisibleAfter(i)}
+          {#if nextC}
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <div
+              class="absolute top-0 right-0 h-full w-1.5 cursor-col-resize
+                     after:absolute after:top-1 after:bottom-1 after:right-0.5 after:w-px
+                     after:bg-zinc-300 dark:after:bg-zinc-700
+                     hover:bg-sky-400/60 hover:after:bg-transparent"
+              class:bg-sky-500={resizeId === nextC.id}
+              onpointerdown={(e) => onResizeNextDown(e, nextC)}
+              ondblclick={(e) => onResizeDblClick(e, nextC)}
+              title="drag to resize next column · double-click to reset"
+              aria-hidden="true">
+            </div>
+          {/if}
         {/if}
       </div>
     {/if}

@@ -10,7 +10,7 @@
   import { BUILTINS as COLUMN_BUILTINS } from "./columns";
   import Icon from "./Icon.svelte";
   import Combobox from "./Combobox.svelte";
-  import { type QuickChip, QUICK_CHANGED, loadQuickChips } from "./quick-filters";
+  import { type QuickChip, QUICK_CHANGED, loadQuickChips, setChipEnabled } from "./quick-filters";
 
   let {
     expression,
@@ -172,8 +172,13 @@
             <li class="flex items-center gap-1.5 px-1.5 py-0.5 rounded bg-amber-500/15 text-[11px]">
               <span class="text-amber-700 dark:text-amber-300 font-medium shrink-0">{c.label}</span>
               <code
-                class="mono truncate text-[10px] text-amber-700/80 dark:text-amber-300/80"
+                class="mono truncate flex-1 text-[10px] text-amber-700/80 dark:text-amber-300/80"
                 title={c.expr}>{c.expr || "(no filter)"}</code>
+              <button
+                class="shrink-0 text-amber-700/70 dark:text-amber-300/70 hover:text-red-500"
+                title="disable pinned filter"
+                aria-label="disable pinned filter"
+                onclick={() => setChipEnabled(c.label, false)}>×</button>
             </li>
           {/each}
         </ul>

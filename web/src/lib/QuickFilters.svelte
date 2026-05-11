@@ -6,6 +6,7 @@
     loadQuickChips,
     persistQuickChips,
     requestSaveQuick,
+    resetWorkingChips,
     setChipPinned,
     setChipEnabled,
   } from "./quick-filters";
@@ -74,6 +75,106 @@
 
   function pinFromOverflow(label: string) {
     pin(label);
+  }
+
+  function resetDefaults() {
+    resetWorkingChips();
+  }
+
+  // Drag-to-reorder for working chips. Same pattern as ColumnHeader: a
+  // pixel threshold gates the drag so a quick mousedown→up still acts
+  // as a click (apply filter). After a real drag we set `dragJustEnded`
+  // and the chip's click handler swallows the trailing click event.
+  const DRAG_THRESHOLD_PX = 4;
+  let dragLabel = $state<string | null>(null);
+  let dropIdx = $state<number | null>(null);
+  let dragOriginX = 0;
+  let dragOriginY = 0;
+  let dragJustEnded = false;
+
+  function chipRects(): { label: string; left: number; right: number }[] {
+    if (!listEl) return [];
+    const cells = listEl.querySelectorAll<HTMLElement>("[data-chip-label]");
+    const out: { label: string; left: number; right: number }[] = [];
+    for (const el of cells) {
+      if (el.offsetParent === null) continue;
+      const label = el.dataset.chipLabel!;
+      const r = el.getBoundingClientRect();
+      out.push({ label, left: r.left, right: r.right });
+    }
+    return out;
+  }
+
+  function onChipPointerDown(e: PointerEvent, label: string) {
+    if (e.button !== 0) return;
+    dragLabel = label;
+    dragOriginX = e.clientX;
+    dragOriginY = e.clientY;
+    dropIdx = null;
+    window.addEventListener("pointermove", onDragMove);
+    window.addEventListener("pointerup", onDragUp, { once: true });
+  }
+
+  function onDragMove(e: PointerEvent) {
+    if (dragLabel == null) return;
+    const dx = e.clientX - dragOriginX;
+    const dy = e.clientY - dragOriginY;
+    if (dropIdx == null && Math.hypot(dx, dy) < DRAG_THRESHOLD_PX) return;
+    const rects = chipRects();
+    if (rects.length === 0) return;
+    let chosen: { label: string; before: boolean } | null = null;
+    for (const r of rects) {
+      if (e.clientX < r.left) { chosen = { label: r.label, before: true }; break; }
+      if (e.clientX <= r.right) {
+        const mid = (r.left + r.right) / 2;
+        chosen = { label: r.label, before: e.clientX < mid };
+        break;
+      }
+    }
+    if (!chosen) {
+      const last = rects[rects.length - 1];
+      chosen = { label: last.label, before: false };
+    }
+    let target = workingChips.findIndex((c: QuickChip) => c.label === chosen!.label);
+    if (!chosen.before) target += 1;
+    const from = workingChips.findIndex((c: QuickChip) => c.label === dragLabel);
+    if (from >= 0 && from < target) target -= 1;
+    dropIdx = Math.max(0, Math.min(workingChips.length - 1, target));
+  }
+
+  function onDragUp() {
+    window.removeEventListener("pointermove", onDragMove);
+    const dragged = dropIdx != null;
+    if (dragLabel != null && dropIdx != null) {
+      const all = loadQuickChips();
+      const workingOrder = all.filter((c) => !c.pinned).map((c) => c.label);
+      const from = workingOrder.indexOf(dragLabel);
+      if (from >= 0 && from !== dropIdx) {
+        const [moved] = workingOrder.splice(from, 1);
+        workingOrder.splice(dropIdx, 0, moved);
+        const byLabel = new Map(all.map((c) => [c.label, c]));
+        const next: QuickChip[] = [];
+        let wi = 0;
+        for (const c of all) {
+          if (c.pinned) next.push(c);
+          else next.push(byLabel.get(workingOrder[wi++])!);
+        }
+        persistQuickChips(next);
+        chips = loadQuickChips();
+      }
+    }
+    dragLabel = null;
+    dropIdx = null;
+    if (dragged) dragJustEnded = true;
+  }
+
+  function onChipClick(e: MouseEvent, expr: string) {
+    if (dragJustEnded) {
+      dragJustEnded = false;
+      e.preventDefault();
+      return;
+    }
+    onApply(expr);
   }
 
   function measure() {
@@ -149,17 +250,10 @@
           {@const enabled = c.enabled !== false}
           <span class="chip-wrap group relative inline-flex items-center">
             <button
-              class="relative px-2 py-0.5 rounded text-[11px] mono whitespace-nowrap transition-colors"
-              class:bg-amber-500={enabled}
-              class:text-white={enabled}
-              class:bg-zinc-100={!enabled}
-              class:dark:bg-zinc-800={!enabled}
+              class={`px-2 py-0.5 rounded text-[11px] mono whitespace-nowrap transition-colors ${enabled ? "bg-amber-500 text-white" : "bg-amber-500/20 text-amber-700 dark:text-amber-300"}`}
               title={`${c.expr || "no filter"} — click to ${enabled ? "disable" : "enable"}${i < 9 ? ` (Shift+${i + 1})` : ""}`}
               onclick={() => toggleEnabled(c.label)}>
               {c.label}
-              {#if !enabled}
-                <span class="pointer-events-none absolute left-1 right-1 bottom-0.5 h-0.5 bg-amber-500 opacity-50 rounded-full"></span>
-              {/if}
             </button>
             <span class="chip-actions opacity-0 group-hover:opacity-100 focus-within:opacity-100 absolute -top-1.5 -right-1 inline-flex items-center gap-px">
               <button
@@ -182,13 +276,27 @@
     <span class="shrink-0 w-px h-4 bg-zinc-300 dark:bg-zinc-700"></span>
   {/if}
   <div bind:this={listEl} class="quick-list flex items-center gap-1.5 min-w-0 flex-1 overflow-x-clip overflow-y-visible">
+    {#if workingChips.length === 0}
+      <button
+        class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] mono text-zinc-500 hover:text-sky-600 dark:hover:text-sky-400 border border-dashed border-zinc-300 dark:border-zinc-700 hover:border-sky-400"
+        title="Restore the default chip set (all / info+ / warn+ / error+)"
+        onclick={resetDefaults}>
+        <Icon name="refresh" size={10} />
+        reset to defaults
+      </button>
+    {/if}
     {#each workingChips as c, i (c.label)}
       <span
+        data-chip-label={c.label}
         class="chip-wrap group relative inline-flex items-center"
-        class:chip-hidden={i >= visibleCount}>
+        class:chip-hidden={i >= visibleCount}
+        class:opacity-50={dragLabel === c.label}
+        class:ring-2={dropIdx === i && dragLabel && dragLabel !== c.label}
+        class:ring-sky-400={dropIdx === i && dragLabel && dragLabel !== c.label}
+        class:rounded={dropIdx === i && dragLabel && dragLabel !== c.label}>
         <button
           data-chip
-          class="px-2 py-0.5 rounded text-[11px] mono whitespace-nowrap transition-colors"
+          class="px-2 py-0.5 rounded text-[11px] mono whitespace-nowrap transition-colors select-none cursor-grab active:cursor-grabbing"
           class:bg-sky-600={isActive(c.expr)}
           class:text-white={isActive(c.expr)}
           class:bg-zinc-100={!isActive(c.expr)}
@@ -196,7 +304,8 @@
           class:hover:bg-zinc-200={!isActive(c.expr)}
           class:dark:hover:bg-zinc-700={!isActive(c.expr)}
           title={c.expr || "no filter"}
-          onclick={() => onApply(c.expr)}>{c.label}</button>
+          onpointerdown={(e) => onChipPointerDown(e, c.label)}
+          onclick={(e) => onChipClick(e, c.expr)}>{c.label}</button>
         <span class="chip-actions opacity-0 group-hover:opacity-100 focus-within:opacity-100 absolute -top-1.5 -right-1 inline-flex items-center gap-px">
           <button
             class="w-3.5 h-3.5 rounded-full bg-zinc-700 dark:bg-zinc-200 text-white dark:text-zinc-900 flex items-center justify-center"

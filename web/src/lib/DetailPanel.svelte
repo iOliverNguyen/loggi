@@ -3,11 +3,12 @@
   import { ansiToHTML } from "./ansi";
   import JsonTree from "./JsonTree.svelte";
 
-  let { entry, sources, onClose, onAddFilter, isPathFiltered, collapsedPaths = [], onToggleCollapsedPath } = $props<{
+  let { entry, sources, onClose, onAddFilter, onReplaceFilter, isPathFiltered, collapsedPaths = [], onToggleCollapsedPath } = $props<{
     entry: Entry;
     sources: SourceInfo[];
     onClose: () => void;
     onAddFilter: (clause: string) => void;
+    onReplaceFilter?: (clause: string) => void;
     isPathFiltered?: (p: string[]) => boolean;
     collapsedPaths?: string[];
     onToggleCollapsedPath?: (path: string[], on: boolean) => void;
@@ -83,6 +84,12 @@
     const rhs = op === "exists" ? "*" : valueLiteral(v);
     const clause = `${negate ? "-" : ""}${fieldRef(path)}:${rhs}`;
     onAddFilter(clause);
+  }
+
+  function onReplaceField(path: string[], v: unknown, negate: boolean, op: "eq" | "exists" = "eq") {
+    const rhs = op === "exists" ? "*" : valueLiteral(v);
+    const clause = `${negate ? "-" : ""}${fieldRef(path)}:${rhs}`;
+    onReplaceFilter?.(clause);
   }
 
   function copyJSON() {
@@ -203,7 +210,7 @@
       <section>
         <h3 class="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold mb-1">Fields</h3>
         <div class="bg-zinc-50 dark:bg-zinc-900 rounded p-2 overflow-x-auto">
-          <JsonTree value={entry.fields} onAddFilter={onAddField} {isPathFiltered} {collapsedPaths} {onToggleCollapsedPath} depth={1} />
+          <JsonTree value={entry.fields} onAddFilter={onAddField} onReplaceFilter={onReplaceField} {isPathFiltered} {collapsedPaths} {onToggleCollapsedPath} depth={1} />
         </div>
       </section>
     {/if}
