@@ -305,4 +305,7 @@ func TestRegex(t *testing.T) {
 	if _, err := count(s, `msg:/[/`); err == nil {
 		t.Fatalf("expected bad-regex error for /[/")
 	}
+	if _, err := count(s, `msg:/foo/g`); err == nil {
+		t.Fatalf("expected error for unsupported g flag")
+	}
 }

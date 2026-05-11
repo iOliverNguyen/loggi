@@ -55,7 +55,7 @@
     chips = loadQuickChips();
   }
 
-  function togglePinned(label: string) {
+  function toggleEnabled(label: string) {
     const c = chips.find((x) => x.label === label);
     setChipEnabled(label, !(c?.enabled !== false));
     chips = loadQuickChips();
@@ -143,7 +143,7 @@
             class:dark:bg-zinc-800={!enabled}
             class:opacity-50={!enabled}
             title={`${c.expr || "no filter"} — click to ${enabled ? "disable" : "enable"}${i < 9 ? ` (Shift+${i + 1})` : ""}`}
-            onclick={() => togglePinned(c.label)}>
+            onclick={() => toggleEnabled(c.label)}>
             {#if enabled}<Icon name="check" size={10} />{/if}
             {c.label}
           </button>

@@ -50,9 +50,9 @@ export const BARE_FIELDS = new Set<string>([
 
 export function setBareFields(fields: string[]): void {
   BARE_FIELDS.clear();
-  // ts and source are always bare (synthetic UI fields), regardless of
-  // what the server reports as pre-allocated hot columns.
-  BARE_FIELDS.add("ts");
+  // `source` is the only true synthetic field — the server resolves it
+  // from SourceID at materialize time, so it never appears in the
+  // well-known list but should still render bare in chip terms.
   BARE_FIELDS.add("source");
   for (const f of fields) BARE_FIELDS.add(f);
 }
@@ -200,6 +200,9 @@ function parseRegexLiteral(value: string): { pattern: string; flags: string } | 
   const flags = value.slice(end);
   const body = value.slice(1, end - 1);
   if (body === "") return null;
+  // TODO: strip or warn on `g` here too — server rejects it. The wire
+  // form round-trips, so chip-built regex with `g` would re-emit it and
+  // fail server-side parse on the next apply.
   return { pattern: body.replace(/\\\//g, "/"), flags };
 }
 

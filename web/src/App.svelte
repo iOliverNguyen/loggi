@@ -254,6 +254,9 @@
     bus.onstatus = (open) => {
       connected = open;
       if (open) {
+        // Re-establish state on reconnect: lastSentFilter is per-session,
+        // so the subscribe below always carries fresh server state.
+        lastSentFilter = null;
         // A fresh subscribe means the server will resend backlog; reset our
         // history-pagination state so scroll-to-bottom can fetch older rows
         // again.
@@ -513,8 +516,17 @@
   // sendFilter pushes the *effective* filter (pinned ANDed onto working)
   // to the server and resets the streaming view. Called by applyFilter
   // and by the pinned-chip toggle effect below.
+  //
+  // A `lastSentFilter` guard short-circuits back-to-back identical sends.
+  // Without this, "Filter only by X" (which both persists pinned-chip
+  // state AND calls applyFilter) fires two `filter` frames whose `entries
+  // = []` resets race each other. Reset to null on bus reconnect so the
+  // post-reconnect subscribe re-establishes state.
+  let lastSentFilter: string | null = null;
   function sendFilter() {
     const eff = effectiveFilterFor(filter);
+    if (eff === lastSentFilter) return;
+    lastSentFilter = eff;
     bus?.send({ type: "filter", filter: { sub_id: SUB_ID, filter: eff } });
     entries = [];
     dropped = 0;
@@ -682,14 +694,50 @@
     // filter to `clause`, so the effective filter is exactly this clause.
     // Pinned chips stay around for one-toggle restoration.
     const next = quickChips.map((c) => (c.pinned ? { ...c, enabled: false } : c));
+    const hadEnabledPinned = quickChips.some((c) => c.pinned && c.enabled !== false);
     persistQuickChips(next);
     pendingFilter = clause;
     applyFilter();
+    if (hadEnabledPinned) {
+      flashToast("Pinned filters disabled — click amber chips to re-enable", 3000);
+    }
   }
 
   let activeProfileCollapsed = $derived(
     profiles.find((p) => p.name === activeProfile)?.collapsed_fields ?? [],
   );
+
+  // Toggle a dotted path on the active profile's CollapsedFields list and
+  // persist via /api/profiles. No-op when no profile is active.
+  async function toggleCollapsedPath(p: string[], on: boolean) {
+    if (!activeProfile) return;
+    const prof = profiles.find((x) => x.name === activeProfile);
+    if (!prof) return;
+    const key = p.join(".");
+    const current = prof.collapsed_fields ?? [];
+    const next = on ? [...current.filter((x) => x !== key), key] : current.filter((x) => x !== key);
+    try {
+      const r = await fetch("/api/profiles", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: prof.name,
+          filter: prof.filter ?? "",
+          columns: prof.columns ?? [],
+          collapsed_fields: next,
+          sources: prof.sources ?? [],
+          destination: "user",
+        }),
+      });
+      if (!r.ok) {
+        flashToast(`save failed: ${await r.text()}`, 3000);
+        return;
+      }
+      await refreshProfiles();
+    } catch (e: any) {
+      flashToast(e?.message ?? "save failed", 3000);
+    }
+  }
 
   let activeFilterFields = $derived.by(() => {
     const set = new Set<string>();
@@ -1446,7 +1494,7 @@
       bind:this={listEl}
       onscroll={onScroll}
       class="flex-1 overflow-y-auto mono text-xs">
-      <div bind:this={headerEl} class="sticky top-0 z-20 bg-zinc-50 dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800">
+      <div bind:this={headerEl} class="sticky top-0 z-10 bg-zinc-50 dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800">
         <ColumnHeader {columns} {showTimestamps} />
       </div>
       {#if pinnedEntries.length > 0}
@@ -1539,7 +1587,8 @@
         onClose={closePanel}
         onAddFilter={addFilterClause}
         {isPathFiltered}
-        collapsedPaths={activeProfileCollapsed} />
+        collapsedPaths={activeProfileCollapsed}
+        onToggleCollapsedPath={toggleCollapsedPath} />
     {/if}
   </div>
 

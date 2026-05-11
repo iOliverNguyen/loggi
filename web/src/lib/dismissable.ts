@@ -12,10 +12,13 @@
 
 export function dismissOnOutside(el: HTMLElement | null, close: () => void): () => void {
   if (!el) return () => {};
+  let alive = true;
   const onDoc = (e: MouseEvent) => {
     if (!el.contains(e.target as Node)) close();
   };
-  const id = queueMicrotask(() => document.addEventListener("mousedown", onDoc));
-  void id;
-  return () => document.removeEventListener("mousedown", onDoc);
+  queueMicrotask(() => { if (alive) document.addEventListener("mousedown", onDoc); });
+  return () => {
+    alive = false;
+    document.removeEventListener("mousedown", onDoc);
+  };
 }

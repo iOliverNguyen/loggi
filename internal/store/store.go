@@ -108,15 +108,15 @@ func New(opts Options) *Store {
 		promoCnt: make(map[string]uint32),
 		subs:     make(map[uint64]*Subscriber),
 	}
-	// ts column always hot.
-	s.hot["ts"] = newColumn("ts", ColF64, cap)
-	// Pre-allocate the most common hot columns; they get filled lazily.
-	// `source` is rendered as a UI column too, but synthesized from
-	// SourceID at materialize time — not pre-allocated here.
+	// Pre-allocate the well-known hot columns. `ts` is F64-encoded for
+	// numeric range/compare filters; the rest are Dict-encoded (msg
+	// promotes to Raw above the cardinality threshold). `source` is
+	// rendered as a UI column but synthesized from SourceID at
+	// materialize time — not pre-allocated here.
 	for _, k := range WellKnownHotFields {
 		kind := ColDict
-		if k == "msg" {
-			kind = ColDict // msg also dict-encoded; high cardinality triggers Raw promotion
+		if k == "ts" {
+			kind = ColF64
 		}
 		s.hot[k] = newColumn(k, kind, cap)
 	}
@@ -125,9 +125,10 @@ func New(opts Options) *Store {
 
 // WellKnownHotFields is the set of pre-allocated hot column names. The
 // HTTP `/api/columns` handler exposes this so the frontend doesn't need
-// to hard-code a parallel list.
+// to hard-code a parallel list. `ts` leads and is encoded as ColF64; the
+// rest are ColDict.
 var WellKnownHotFields = []string{
-	"level", "service", "env", "version", "msg", "caller", "callerFunc", "trace_id",
+	"ts", "level", "service", "env", "version", "msg", "caller", "callerFunc", "trace_id",
 }
 
 func nextPow2(n uint64) uint64 {

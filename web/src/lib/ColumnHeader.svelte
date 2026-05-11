@@ -21,7 +21,7 @@
           <span class="shrink-0 truncate" style="width:{c.width}px">{labelFor(c)}</span>
         {/if}
       {:else if c.id === "msg"}
-        <span class="truncate" class:flex-1={c.width === 0} class:shrink-0={c.width > 0}
+        <span class="flex-1 truncate" class:shrink-0={c.width > 0}
               style={c.width ? `width:${c.width}px;flex:none` : ""}>{labelFor(c)}</span>
       {:else}
         <span class="shrink-0 truncate" style={c.width ? `width:${c.width}px` : ""}>{labelFor(c)}</span>

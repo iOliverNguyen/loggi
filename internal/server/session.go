@@ -68,7 +68,7 @@ func (s *Server) runSession(ctx context.Context, conn Conn) {
 		stdinSrcs: make(map[uint64]*stdinSource),
 	}
 	// Send the snapshot BEFORE registering the session. If we registered
-	// first, a concurrent broadcastSourceState (e.g. detectMode publishing
+	// first, a concurrent broadcastSourceState (e.g. observeMode publishing
 	// "open" on first ingest) could slip a "source" frame in front of the
 	// snapshot — clients consume the first frame as a snapshot.
 	//

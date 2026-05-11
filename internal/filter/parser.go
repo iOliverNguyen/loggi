@@ -618,6 +618,8 @@ func (p *parser) parseFieldValue(path []string) (Node, error) {
 		p.advance()
 		// Regex literal: /pattern/flags. Detected on tStar tokens that
 		// start with `/` and end with a `/` plus optional ig flags.
+		// TODO: a dedicated tRegex token would isolate this from future
+		// glob/tokenizer changes.
 		if t.kind == tStar {
 			if pat, flags, ok := splitRegexLiteral(t.text); ok {
 				re, err := compileRegexLiteral(pat, flags)
@@ -720,10 +722,17 @@ func splitRegexLiteral(tok string) (pattern, flags string, ok bool) {
 }
 
 func compileRegexLiteral(pattern, flags string) (*regexp.Regexp, error) {
+	// `g` is a JS-only "find all" flag; MatchString already scans the
+	// whole value, so accepting `g` would silently behave identically
+	// to no flag. Reject up front so the user knows their flag is being
+	// ignored — and so the flag doesn't round-trip back as `g` and then
+	// fail-parse on the next typed application.
+	if strings.Contains(flags, "g") {
+		return nil, fmt.Errorf("g flag not supported (regex already scans the whole value)")
+	}
 	pat := pattern
 	if strings.Contains(flags, "i") {
 		pat = "(?i)" + pat
 	}
-	// `g` is a JS-only "find all" flag; harmless for MatchString.
 	return regexp.Compile(pat)
 }

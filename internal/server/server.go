@@ -689,11 +689,16 @@ func (s *Server) ingester() {
 }
 
 func (s *Server) processLine(line source.RawLine) {
-	mode, justSet := s.detectMode(line.SourceID, line.Bytes)
-	switch mode {
-	case "json":
+	lineJSON := isJSONObj(line.Bytes)
+	_, justSet := s.observeMode(line.SourceID, lineJSON)
+	// Route per-line, not per cached source mode: a JSON line embedded
+	// in a text-locked stream (e.g. zap output after a startup stack
+	// trace) must still be parsed. A non-JSON line in a JSON-locked
+	// stream (e.g. a panic dump) falls through to the text path for
+	// that single row without flipping the source's UI badge.
+	if lineJSON {
 		s.store.Publish(store.AppendInput{SourceID: line.SourceID, JSON: line.Bytes})
-	default:
+	} else {
 		ansi, plain := stripANSI(line.Bytes)
 		s.store.Publish(store.AppendInput{
 			SourceID: line.SourceID,
@@ -715,34 +720,51 @@ func (s *Server) processLine(line source.RawLine) {
 	}
 }
 
-// detectMode caches a per-source decision: on the first ingested line for a
-// source, decide JSON vs text. Once decided, mode is sticky and read-only.
+// observeMode updates the source's UI mode label given whether the
+// current line parses as a JSON object. Semantics:
+//   - First observation: store whatever the line says ("json" if
+//     lineJSON, else "text"); report changed=true.
+//   - Subsequent: upgrade-only text → json on the first JSON line seen.
+//     A JSON-locked source never reverts to text on a non-JSON line —
+//     single panic dumps in an otherwise-structured stream shouldn't
+//     flip the badge.
+//
 // rec.mode is an atomic.Pointer so the per-line check is uncontended.
-// justSet is true only for the goroutine that won the CAS — used by the
-// caller to broadcast a one-time mode-update event.
-func (s *Server) detectMode(id uint64, line []byte) (mode string, justSet bool) {
+// changed is true only for the goroutine that won the relevant CAS;
+// the caller broadcasts a source-state update on that transition.
+func (s *Server) observeMode(id uint64, lineJSON bool) (mode string, changed bool) {
 	s.srcMu.RLock()
 	rec, ok := s.srcs[id]
 	s.srcMu.RUnlock()
 	if !ok {
-		// Anonymous; try JSON.
-		if isJSONObj(line) {
+		// Anonymous (test paths / pre-attach lines): report the per-line
+		// view without touching any source record.
+		if lineJSON {
 			return "json", false
 		}
 		return "text", false
 	}
-	if m := rec.mode.Load(); m != nil {
-		return *m, false
+	cur := rec.mode.Load()
+	if cur == nil {
+		m := "text"
+		if lineJSON {
+			m = "json"
+		}
+		if rec.mode.CompareAndSwap(nil, &m) {
+			return m, true
+		}
+		// Lost the CAS race; fall through to the upgrade check below.
+		cur = rec.mode.Load()
 	}
-	m := "text"
-	if isJSONObj(line) {
-		m = "json"
+	if *cur == "text" && lineJSON {
+		jsonM := "json"
+		if rec.mode.CompareAndSwap(cur, &jsonM) {
+			return jsonM, true
+		}
+		// Another goroutine moved it; re-read.
+		return *rec.mode.Load(), false
 	}
-	if rec.mode.CompareAndSwap(nil, &m) {
-		return m, true
-	}
-	// Lost the CAS race; re-read what the winner stored.
-	return *rec.mode.Load(), false
+	return *cur, false
 }
 
 func isJSONObj(b []byte) bool {

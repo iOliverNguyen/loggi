@@ -146,7 +146,7 @@
       <button class="opacity-0 group-hover:opacity-100 px-2 text-zinc-500 hover:text-amber-600 dark:hover:text-amber-400"
               title="Filter only by this — clears working filter and disables pinned"
               onclick={() => fire(() => onFilterOnly(clause))}>
-        <Icon name="star" size={12} />
+        <Icon name="crosshair" size={12} />
       </button>
     </div>
   {/snippet}

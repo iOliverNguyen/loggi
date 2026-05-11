@@ -3,12 +3,13 @@
   import Self from "./JsonTree.svelte";
   import Icon from "./Icon.svelte";
 
-  let { value, path = [], onAddFilter, isPathFiltered, collapsedPaths = [], depth = 0 } = $props<{
+  let { value, path = [], onAddFilter, isPathFiltered, collapsedPaths = [], onToggleCollapsedPath, depth = 0 } = $props<{
     value: unknown;
     path?: string[];
     onAddFilter?: (p: string[], v: unknown, negate: boolean, op?: "eq" | "exists") => void;
     isPathFiltered?: (p: string[]) => boolean;
     collapsedPaths?: string[];
+    onToggleCollapsedPath?: (path: string[], on: boolean) => void;
     depth?: number;
   }>();
 
@@ -17,6 +18,7 @@
     if (here && collapsedPaths.includes(here)) return true;
     return depth >= 3;
   }));
+  let pinnedHere = $derived(path.length > 0 && collapsedPaths.includes(path.join(".")));
   let showFull = $state(false);
   const TRUNC = 200;
 
@@ -49,7 +51,7 @@
 </script>
 
 {#if isObj(value) || isArr(value)}
-  <div class="font-mono text-[12px]">
+  <div class="font-mono text-[12px] inline-flex items-baseline gap-1">
     <button
       type="button"
       class="text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 select-none"
@@ -60,6 +62,21 @@
         {isArr(value) ? `[${(value as unknown[]).length}]` : `{${Object.keys(value as object).length}}`}
       </span>
     </button>
+    {#if onToggleCollapsedPath && path.length > 0}
+      <button
+        type="button"
+        class="p-0.5 rounded transition-opacity"
+        class:opacity-0={!pinnedHere}
+        class:group-hover:opacity-100={!pinnedHere}
+        class:text-amber-500={pinnedHere}
+        class:text-zinc-400={!pinnedHere}
+        class:hover:text-amber-600={!pinnedHere}
+        title={pinnedHere ? "Unpin: stop auto-collapsing this path for this profile" : "Pin: always start this path collapsed for this profile"}
+        onclick={(e) => { e.stopPropagation(); onToggleCollapsedPath!(path, !pinnedHere); }}
+        aria-label={pinnedHere ? "unpin collapsed" : "pin collapsed"}>
+        <Icon name="pin" size={10} />
+      </button>
+    {/if}
     {#if !collapsed}
       <ul class="ml-4 border-l border-zinc-200 dark:border-zinc-800 pl-2">
         {#each entries(value) as [k, v]}
@@ -76,7 +93,7 @@
             <span class="text-violet-700 dark:text-violet-300 shrink-0">{k}</span>
             <span class="text-zinc-400 shrink-0">:</span>
             <div class="flex-1 min-w-0">
-              <Self value={v} path={childPath} {onAddFilter} {isPathFiltered} {collapsedPaths} depth={depth + 1} />
+              <Self value={v} path={childPath} {onAddFilter} {isPathFiltered} {collapsedPaths} {onToggleCollapsedPath} depth={depth + 1} />
             </div>
             {#if onAddFilter}
               <span class="opacity-0 group-hover:opacity-100 transition-opacity flex gap-0.5 shrink-0">
