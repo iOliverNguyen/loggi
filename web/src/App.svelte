@@ -161,7 +161,10 @@
   let bottomPad = $derived(Math.max(0, (entries.length - endIndex) * rowH));
 
   let showAddSource = $state(false);
-  let showFilters = $state(true);
+  let showFilters = $state((localStorage.getItem("loggi.showFilters") ?? "1") !== "0");
+  $effect(() => {
+    try { localStorage.setItem("loggi.showFilters", showFilters ? "1" : "0"); } catch {}
+  });
 
   // Highlight regex/hit count derive after `entries` and `highlight` are
   // declared (above). Defined here because we need them late in the script.
@@ -707,42 +710,6 @@
     }
   }
 
-  let activeProfileCollapsed = $derived(
-    profiles.find((p) => p.name === activeProfile)?.collapsed_fields ?? [],
-  );
-
-  // Toggle a dotted path on the active profile's CollapsedFields list and
-  // persist via /api/profiles. No-op when no profile is active.
-  async function toggleCollapsedPath(p: string[], on: boolean) {
-    if (!activeProfile) return;
-    const prof = profiles.find((x) => x.name === activeProfile);
-    if (!prof) return;
-    const key = p.join(".");
-    const current = prof.collapsed_fields ?? [];
-    const next = on ? [...current.filter((x) => x !== key), key] : current.filter((x) => x !== key);
-    try {
-      const r = await fetch("/api/profiles", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: prof.name,
-          filter: prof.filter ?? "",
-          columns: prof.columns ?? [],
-          collapsed_fields: next,
-          sources: prof.sources ?? [],
-          destination: "user",
-        }),
-      });
-      if (!r.ok) {
-        flashToast(`save failed: ${await r.text()}`, 3000);
-        return;
-      }
-      await refreshProfiles();
-    } catch (e: any) {
-      flashToast(e?.message ?? "save failed", 3000);
-    }
-  }
-
   let activeFilterFields = $derived.by(() => {
     const set = new Set<string>();
     const r = parseClauses(filter);
@@ -1016,6 +983,11 @@
         highlightInputEl?.focus();
         highlightInputEl?.select();
       });
+      return;
+    }
+    if ((e.metaKey || e.ctrlKey) && (e.key === "b" || e.key === "B")) {
+      e.preventDefault();
+      showFilters = !showFilters;
       return;
     }
     if ((e.metaKey || e.ctrlKey) && (e.key === "c" || e.key === "C") && selectedSet.size > 0) {
@@ -1309,6 +1281,16 @@
       {/if}
     </div>
     <button
+      class={showFilters
+        ? "p-1.5 rounded bg-sky-600 text-white hover:bg-sky-700"
+        : iconBtnCls}
+      title={showFilters ? "Hide filter sidebar (⌘B)" : "Show filter sidebar (⌘B)"}
+      aria-label="toggle filter sidebar"
+      aria-pressed={showFilters}
+      onclick={() => (showFilters = !showFilters)}>
+      <Icon name="filter" size={16} />
+    </button>
+    <button
       class={showTimeline
         ? "p-1.5 rounded bg-sky-600 text-white hover:bg-sky-700"
         : iconBtnCls}
@@ -1409,6 +1391,7 @@
 
   <div class="flex-1 flex min-h-0">
     <!-- sidebar -->
+    {#if showFilters}
     <aside
       class="w-64 border-r border-zinc-200 dark:border-zinc-800 p-3 text-sm overflow-y-auto">
       <FilterBuilder
@@ -1495,6 +1478,7 @@
         </div>
       {/each}
     </aside>
+    {/if}
 
     <!-- log list -->
     <main
@@ -1594,9 +1578,7 @@
         onClose={closePanel}
         onAddFilter={addFilterClause}
         onReplaceFilter={filterOnlyClause}
-        {isPathFiltered}
-        collapsedPaths={activeProfileCollapsed}
-        onToggleCollapsedPath={toggleCollapsedPath} />
+        {isPathFiltered} />
     {/if}
   </div>
 
@@ -1625,7 +1607,7 @@
     initialName={activeProfile && profiles.some((p) => p.name === activeProfile) ? "" : activeProfile}
     initialFilter={filter}
     initialColumns={toProfileIDs(columns)}
-    initialCollapsed={activeProfileCollapsed}
+    initialCollapsed={profiles.find((p) => p.name === activeProfile)?.collapsed_fields ?? []}
     currentSources={sources.map((s) => ({ kind: s.kind, name: s.name }))}
     onClose={() => (showSaveProfile = false)}
     onSaved={async (name, path) => {

@@ -3,23 +3,16 @@
   import Self from "./JsonTree.svelte";
   import Icon from "./Icon.svelte";
 
-  let { value, path = [], onAddFilter, onReplaceFilter, isPathFiltered, collapsedPaths = [], onToggleCollapsedPath, depth = 0 } = $props<{
+  let { value, path = [], onAddFilter, onReplaceFilter, isPathFiltered, depth = 0 } = $props<{
     value: unknown;
     path?: string[];
     onAddFilter?: (p: string[], v: unknown, negate: boolean, op?: "eq" | "exists") => void;
     onReplaceFilter?: (p: string[], v: unknown, negate: boolean, op?: "eq" | "exists") => void;
     isPathFiltered?: (p: string[]) => boolean;
-    collapsedPaths?: string[];
-    onToggleCollapsedPath?: (path: string[], on: boolean) => void;
     depth?: number;
   }>();
 
-  let collapsed = $state(untrack(() => {
-    const here = path.join(".");
-    if (here && collapsedPaths.includes(here)) return true;
-    return depth >= 3;
-  }));
-  let pinnedHere = $derived(path.length > 0 && collapsedPaths.includes(path.join(".")));
+  let collapsed = $state(untrack(() => depth >= 3));
   let showFull = $state(false);
   const TRUNC = 200;
 
@@ -28,6 +21,9 @@
   }
   function isArr(v: unknown): v is unknown[] {
     return Array.isArray(v);
+  }
+  function isContainer(v: unknown): v is Record<string, unknown> | unknown[] {
+    return v !== null && typeof v === "object";
   }
 
   function fieldRef(p: string[]): string {
@@ -49,145 +45,154 @@
     if (isArr(v)) return v.map((x, i) => [String(i), x] as [string, unknown]);
     return Object.entries(v);
   }
+
+  function containerSize(v: Record<string, unknown> | unknown[]): string {
+    return isArr(v) ? `[${v.length}]` : `{${Object.keys(v).length}}`;
+  }
 </script>
 
-{#if isObj(value) || isArr(value)}
-  <div class="font-mono text-[12px]">
-    <span class="inline-flex items-baseline gap-1">
+{#if path.length === 0}
+  <!-- root: standalone object/array (called from DetailPanel) -->
+  {#if isContainer(value)}
+    <div class="font-mono text-[12px]">
       <button
         type="button"
         class="text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 select-none"
         onclick={() => (collapsed = !collapsed)}
         title={collapsed ? "expand" : "collapse"}>
         {collapsed ? "▶" : "▼"}
-        <span class="text-zinc-400">
-          {isArr(value) ? `[${(value as unknown[]).length}]` : `{${Object.keys(value as object).length}}`}
-        </span>
+        <span class="text-zinc-400">{containerSize(value)}</span>
       </button>
-      {#if onToggleCollapsedPath && path.length > 0}
-        <button
-          type="button"
-          class="p-0.5 rounded transition-opacity"
-          class:opacity-0={!pinnedHere}
-          class:group-hover:opacity-100={!pinnedHere}
-          class:text-amber-500={pinnedHere}
-          class:text-zinc-400={!pinnedHere}
-          class:hover:text-amber-600={!pinnedHere}
-          title={pinnedHere ? "Unpin: stop auto-collapsing this path for this profile" : "Pin: always start this path collapsed for this profile"}
-          onclick={(e) => { e.stopPropagation(); onToggleCollapsedPath!(path, !pinnedHere); }}
-          aria-label={pinnedHere ? "unpin collapsed" : "pin collapsed"}>
-          <Icon name="pin" size={10} />
-        </button>
+      {#if !collapsed}
+        <ul class="pl-[2ch]">
+          {#each entries(value) as [k, v]}
+            <Self value={v} path={[k]} {onAddFilter} {onReplaceFilter} {isPathFiltered} depth={depth + 1} />
+          {/each}
+        </ul>
       {/if}
-    </span>
-    {#if !collapsed}
-      <ul class="ml-4 border-l border-zinc-200 dark:border-zinc-800 pl-2">
-        {#each entries(value) as [k, v]}
-          {@const childPath = [...path, k]}
-          {@const isLeaf = typeof v === "string" || typeof v === "number" || typeof v === "boolean"}
-          {@const filtered = isPathFiltered?.(childPath) ?? false}
-          <li
-            class="group flex items-start gap-1 leading-5 hover:bg-sky-50 dark:hover:bg-sky-950/40 hover:ring-1 hover:ring-sky-200 dark:hover:ring-sky-900 rounded px-1 -mx-1 transition-colors"
-            class:bg-sky-100={filtered}
-            class:dark:bg-sky-900={filtered}
-            class:ring-1={filtered}
-            class:ring-sky-300={filtered}
-            class:dark:ring-sky-800={filtered}>
-            <span class="text-violet-700 dark:text-violet-300 shrink-0">{k}</span>
-            <span class="text-zinc-400 shrink-0">:</span>
-            <div class="flex-1 min-w-0">
-              <Self value={v} path={childPath} {onAddFilter} {onReplaceFilter} {isPathFiltered} {collapsedPaths} {onToggleCollapsedPath} depth={depth + 1} />
-            </div>
-            {#if onAddFilter}
-              <span class="opacity-0 group-hover:opacity-100 transition-opacity flex gap-0.5 shrink-0">
-                {#if isLeaf}
-                  <button
-                    class="p-0.5 rounded text-emerald-700 dark:text-emerald-400 hover:bg-emerald-600/15"
-                    title={`filter ${fieldRef(childPath)}:${valueLiteral(v)}`}
-                    onclick={() => onAddFilter(childPath, v, false)}
-                    aria-label="add filter">
-                    <Icon name="plus" size={12} />
-                  </button>
-                  {#if onReplaceFilter}
-                    <button
-                      class="p-0.5 rounded text-sky-700 dark:text-sky-400 hover:bg-sky-600/15"
-                      title={`filter only ${fieldRef(childPath)}:${valueLiteral(v)}`}
-                      onclick={() => onReplaceFilter(childPath, v, false)}
-                      aria-label="replace all filters with this">
-                      <Icon name="crosshair" size={12} />
-                    </button>
-                  {/if}
-                  <button
-                    class="p-0.5 rounded text-rose-700 dark:text-rose-400 hover:bg-rose-600/15"
-                    title={`filter -${fieldRef(childPath)}:${valueLiteral(v)}`}
-                    onclick={() => onAddFilter(childPath, v, true)}
-                    aria-label="exclude filter">
-                    <Icon name="minus" size={12} />
-                  </button>
-                  <button
-                    class="p-0.5 rounded text-zinc-500 hover:bg-zinc-200 dark:hover:bg-zinc-800 hover:text-zinc-800 dark:hover:text-zinc-200"
-                    title="copy value"
-                    onclick={() => copy(typeof v === "string" ? v : String(v))}
-                    aria-label="copy value">
-                    <Icon name="copy" size={12} />
-                  </button>
-                {:else}
-                  <button
-                    class="p-0.5 rounded text-emerald-700 dark:text-emerald-400 hover:bg-emerald-600/15"
-                    title={`filter ${fieldRef(childPath)}:* (field is set)`}
-                    onclick={() => onAddFilter(childPath, undefined, false, "exists")}
-                    aria-label="filter field is set">
-                    <Icon name="plus" size={12} />
-                  </button>
-                  {#if onReplaceFilter}
-                    <button
-                      class="p-0.5 rounded text-sky-700 dark:text-sky-400 hover:bg-sky-600/15"
-                      title={`filter only ${fieldRef(childPath)}:* (field is set)`}
-                      onclick={() => onReplaceFilter(childPath, undefined, false, "exists")}
-                      aria-label="replace all filters with this">
-                      <Icon name="crosshair" size={12} />
-                    </button>
-                  {/if}
-                  <button
-                    class="p-0.5 rounded text-rose-700 dark:text-rose-400 hover:bg-rose-600/15"
-                    title={`filter -${fieldRef(childPath)}:* (field is not set)`}
-                    onclick={() => onAddFilter(childPath, undefined, true, "exists")}
-                    aria-label="filter field is not set">
-                    <Icon name="minus" size={12} />
-                  </button>
-                  <button
-                    class="p-0.5 rounded text-zinc-500 hover:bg-zinc-200 dark:hover:bg-zinc-800 hover:text-zinc-800 dark:hover:text-zinc-200"
-                    title="copy path"
-                    onclick={() => copy(fieldRef(childPath))}
-                    aria-label="copy path">
-                    <Icon name="copy" size={12} />
-                  </button>
-                {/if}
-              </span>
+    </div>
+  {/if}
+{:else}
+  {@const k = path[path.length - 1]}
+  {@const isLeaf = !isContainer(value)}
+  {@const filtered = isPathFiltered?.(path) ?? false}
+  <li
+    class="group leading-5 rounded -mx-1 px-1 transition-colors
+           hover:bg-sky-50 dark:hover:bg-sky-950/40 hover:ring-1 hover:ring-sky-200 dark:hover:ring-sky-900"
+    class:bg-sky-100={filtered}
+    class:dark:bg-sky-900={filtered}
+    class:ring-1={filtered}
+    class:ring-sky-300={filtered}
+    class:dark:ring-sky-800={filtered}>
+    <div class="flex items-start gap-1">
+      <span class="text-violet-700 dark:text-violet-300 shrink-0">{k}</span>
+      <span class="text-zinc-400 shrink-0">:</span>
+      <div class="flex-1 min-w-0">
+        {#if isContainer(value)}
+          <button
+            type="button"
+            class="text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 select-none font-mono text-[12px]"
+            onclick={() => (collapsed = !collapsed)}
+            title={collapsed ? "expand" : "collapse"}>
+            {collapsed ? "▶" : "▼"}
+            <span class="text-zinc-400">{containerSize(value)}</span>
+          </button>
+        {:else if value === null}
+          <span class="text-zinc-400 italic font-mono text-[12px]">null</span>
+        {:else if typeof value === "string"}
+          {@const truncated = value.length > TRUNC && !showFull}
+          <span class="text-emerald-700 dark:text-emerald-400 break-all whitespace-pre-wrap font-mono text-[12px]">
+            {truncated ? value.slice(0, TRUNC) + "…" : value}
+          </span>
+          {#if value.length > TRUNC}
+            <button
+              class="text-[10px] ml-1 text-sky-600 hover:underline"
+              onclick={() => (showFull = !showFull)}>
+              {showFull ? "less" : "more"}
+            </button>
+          {/if}
+        {:else if typeof value === "number"}
+          <span class="text-amber-700 dark:text-amber-400 font-mono text-[12px]">{value}</span>
+        {:else if typeof value === "boolean"}
+          <span class="text-fuchsia-700 dark:text-fuchsia-400 font-mono text-[12px]">{value}</span>
+        {:else}
+          <span class="text-zinc-500 font-mono text-[12px]">{String(value)}</span>
+        {/if}
+      </div>
+      {#if onAddFilter}
+        <span class="opacity-0 group-hover:opacity-100 transition-opacity flex gap-0.5 shrink-0">
+          {#if isLeaf}
+            <button
+              class="p-0.5 rounded text-emerald-700 dark:text-emerald-400 hover:bg-emerald-600/15"
+              title={`filter ${fieldRef(path)}:${valueLiteral(value)}`}
+              onclick={() => onAddFilter(path, value, false)}
+              aria-label="add filter">
+              <Icon name="plus" size={12} />
+            </button>
+            {#if onReplaceFilter}
+              <button
+                class="p-0.5 rounded text-sky-700 dark:text-sky-400 hover:bg-sky-600/15"
+                title={`filter only ${fieldRef(path)}:${valueLiteral(value)}`}
+                onclick={() => onReplaceFilter(path, value, false)}
+                aria-label="replace all filters with this">
+                <Icon name="crosshair" size={12} />
+              </button>
             {/if}
-          </li>
+            <button
+              class="p-0.5 rounded text-rose-700 dark:text-rose-400 hover:bg-rose-600/15"
+              title={`filter -${fieldRef(path)}:${valueLiteral(value)}`}
+              onclick={() => onAddFilter(path, value, true)}
+              aria-label="exclude filter">
+              <Icon name="minus" size={12} />
+            </button>
+            <button
+              class="p-0.5 rounded text-zinc-500 hover:bg-zinc-200 dark:hover:bg-zinc-800 hover:text-zinc-800 dark:hover:text-zinc-200"
+              title="copy value"
+              onclick={() => copy(typeof value === "string" ? value : String(value))}
+              aria-label="copy value">
+              <Icon name="copy" size={12} />
+            </button>
+          {:else}
+            <button
+              class="p-0.5 rounded text-emerald-700 dark:text-emerald-400 hover:bg-emerald-600/15"
+              title={`filter ${fieldRef(path)}:* (field is set)`}
+              onclick={() => onAddFilter(path, undefined, false, "exists")}
+              aria-label="filter field is set">
+              <Icon name="plus" size={12} />
+            </button>
+            {#if onReplaceFilter}
+              <button
+                class="p-0.5 rounded text-sky-700 dark:text-sky-400 hover:bg-sky-600/15"
+                title={`filter only ${fieldRef(path)}:* (field is set)`}
+                onclick={() => onReplaceFilter(path, undefined, false, "exists")}
+                aria-label="replace all filters with this">
+                <Icon name="crosshair" size={12} />
+              </button>
+            {/if}
+            <button
+              class="p-0.5 rounded text-rose-700 dark:text-rose-400 hover:bg-rose-600/15"
+              title={`filter -${fieldRef(path)}:* (field is not set)`}
+              onclick={() => onAddFilter(path, undefined, true, "exists")}
+              aria-label="filter field is not set">
+              <Icon name="minus" size={12} />
+            </button>
+            <button
+              class="p-0.5 rounded text-zinc-500 hover:bg-zinc-200 dark:hover:bg-zinc-800 hover:text-zinc-800 dark:hover:text-zinc-200"
+              title="copy path"
+              onclick={() => copy(fieldRef(path))}
+              aria-label="copy path">
+              <Icon name="copy" size={12} />
+            </button>
+          {/if}
+        </span>
+      {/if}
+    </div>
+    {#if isContainer(value) && !collapsed}
+      <ul class="pl-[2ch]">
+        {#each entries(value) as [ck, cv]}
+          <Self value={cv} path={[...path, ck]} {onAddFilter} {onReplaceFilter} {isPathFiltered} depth={depth + 1} />
         {/each}
       </ul>
     {/if}
-  </div>
-{:else if value === null}
-  <span class="text-zinc-400 italic">null</span>
-{:else if typeof value === "string"}
-  {@const truncated = value.length > TRUNC && !showFull}
-  <span class="text-emerald-700 dark:text-emerald-400 break-all whitespace-pre-wrap">
-    {truncated ? value.slice(0, TRUNC) + "…" : value}
-  </span>
-  {#if value.length > TRUNC}
-    <button
-      class="text-[10px] ml-1 text-sky-600 hover:underline"
-      onclick={() => (showFull = !showFull)}>
-      {showFull ? "less" : "more"}
-    </button>
-  {/if}
-{:else if typeof value === "number"}
-  <span class="text-amber-700 dark:text-amber-400">{value}</span>
-{:else if typeof value === "boolean"}
-  <span class="text-fuchsia-700 dark:text-fuchsia-400">{value}</span>
-{:else}
-  <span class="text-zinc-500">{String(value)}</span>
+  </li>
 {/if}

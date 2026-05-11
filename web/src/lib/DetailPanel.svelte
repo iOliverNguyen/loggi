@@ -2,16 +2,15 @@
   import type { Entry, SourceInfo } from "./types";
   import { ansiToHTML } from "./ansi";
   import JsonTree from "./JsonTree.svelte";
+  import Icon from "./Icon.svelte";
 
-  let { entry, sources, onClose, onAddFilter, onReplaceFilter, isPathFiltered, collapsedPaths = [], onToggleCollapsedPath } = $props<{
+  let { entry, sources, onClose, onAddFilter, onReplaceFilter, isPathFiltered } = $props<{
     entry: Entry;
     sources: SourceInfo[];
     onClose: () => void;
     onAddFilter: (clause: string) => void;
     onReplaceFilter?: (clause: string) => void;
     isPathFiltered?: (p: string[]) => boolean;
-    collapsedPaths?: string[];
-    onToggleCollapsedPath?: (path: string[], on: boolean) => void;
   }>();
 
   let width = $state(parseInt(localStorage.getItem("loggi.panel.width") ?? "480", 10));
@@ -111,13 +110,6 @@
     const s = srcOf(entry.source_id);
     if (s) onAddFilter(`source:${valueLiteral(s.name)}`);
   }
-  function showTrace() {
-    const t = (entry.fields as any)?.trace_id;
-    if (typeof t === "string" || typeof t === "number") {
-      onAddFilter(`trace_id:${valueLiteral(t)}`);
-    }
-  }
-
   let traceID = $derived((entry.fields as any)?.trace_id);
   let src = $derived(srcOf(entry.source_id));
 </script>
@@ -194,13 +186,36 @@
 
     <!-- trace -->
     {#if traceID !== undefined && traceID !== null}
+      {@const traceLit = valueLiteral(traceID)}
       <section>
         <h3 class="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold mb-1">Trace</h3>
-        <div class="bg-zinc-50 dark:bg-zinc-900 rounded p-2 flex items-center justify-between gap-2">
-          <span class="mono break-all">{String(traceID)}</span>
-          <button
-            class="text-[10px] px-1.5 py-0.5 rounded bg-sky-600/10 text-sky-700 dark:text-sky-400 hover:bg-sky-600/20 shrink-0"
-            onclick={showTrace}>show all</button>
+        <div class="group bg-zinc-50 dark:bg-zinc-900 rounded p-2 flex items-center gap-2">
+          <span class="mono break-all flex-1 min-w-0">{String(traceID)}</span>
+          <span class="flex gap-0.5 shrink-0">
+            <button
+              class="p-0.5 rounded text-emerald-700 dark:text-emerald-400 hover:bg-emerald-600/15"
+              title={`filter trace_id:${traceLit}`}
+              onclick={() => onAddFilter(`trace_id:${traceLit}`)}
+              aria-label="add filter">
+              <Icon name="plus" size={12} />
+            </button>
+            {#if onReplaceFilter}
+              <button
+                class="p-0.5 rounded text-sky-700 dark:text-sky-400 hover:bg-sky-600/15"
+                title={`filter only trace_id:${traceLit}`}
+                onclick={() => onReplaceFilter(`trace_id:${traceLit}`)}
+                aria-label="replace all filters with this">
+                <Icon name="crosshair" size={12} />
+              </button>
+            {/if}
+            <button
+              class="p-0.5 rounded text-rose-700 dark:text-rose-400 hover:bg-rose-600/15"
+              title={`filter -trace_id:${traceLit}`}
+              onclick={() => onAddFilter(`-trace_id:${traceLit}`)}
+              aria-label="exclude filter">
+              <Icon name="minus" size={12} />
+            </button>
+          </span>
         </div>
       </section>
     {/if}
@@ -210,7 +225,7 @@
       <section>
         <h3 class="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold mb-1">Fields</h3>
         <div class="bg-zinc-50 dark:bg-zinc-900 rounded p-2 overflow-x-auto">
-          <JsonTree value={entry.fields} onAddFilter={onAddField} onReplaceFilter={onReplaceField} {isPathFiltered} {collapsedPaths} {onToggleCollapsedPath} depth={1} />
+          <JsonTree value={entry.fields} onAddFilter={onAddField} onReplaceFilter={onReplaceField} {isPathFiltered} depth={1} />
         </div>
       </section>
     {/if}
