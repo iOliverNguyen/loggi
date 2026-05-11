@@ -107,13 +107,11 @@
       <section>
         <div class="flex items-center justify-between mb-2">
           <h3 class="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold">Add field column</h3>
-          {#if candidates.length > 0}
-            <input
-              type="text"
-              placeholder="search…"
-              class="px-2 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-[11px] outline-none"
-              bind:value={filterInput} />
-          {/if}
+          <input
+            type="text"
+            placeholder="search…"
+            class="px-2 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-[11px] outline-none"
+            bind:value={filterInput} />
         </div>
         <form
           class="flex gap-1 mb-2"
@@ -127,7 +125,11 @@
                   class="px-2 py-1 rounded bg-sky-600 text-white text-xs hover:bg-sky-700">add</button>
         </form>
         {#if candidates.length === 0}
-          <p class="text-[11px] text-zinc-500">No fields seen yet — once logs arrive, discovered JSON paths will show up here.</p>
+          {#if filterInput}
+            <p class="text-[11px] text-zinc-500">No fields match “{filterInput}”.</p>
+          {:else}
+            <p class="text-[11px] text-zinc-500">No fields seen yet — once logs arrive, discovered JSON paths will show up here.</p>
+          {/if}
         {:else}
           <ul class="grid grid-cols-2 gap-1 max-h-48 overflow-y-auto">
             {#each candidates as f}

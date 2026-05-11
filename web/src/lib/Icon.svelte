@@ -33,7 +33,7 @@
     filter: "M22 3H2l8 9.46V19l4 2v-8.54L22 3z",
     columns: "M3 4h18v16H3z M9 4v16 M15 4v16",
     rows: "M3 6h18M3 12h18M3 18h18",
-    pin: "M12 2v8M5 11h14l-2 9H7l-2-9zM12 11v11",
+    pin: "M12 22v-8M5 13h14l-2 -9H7l-2 9zM12 13v-11",
     plus: "M12 5v14M5 12h14",
     minus: "M5 12h14",
     x: "M18 6L6 18M6 6l12 12",

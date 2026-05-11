@@ -181,7 +181,7 @@
     if (!highlightRe || !s) return escapeHtml(s);
     return escapeHtml(s).replace(
       highlightRe,
-      '<mark class="bg-yellow-200 dark:bg-yellow-700/60 text-inherit rounded-sm px-0.5">$1</mark>',
+      '<mark class="bg-yellow-200 dark:bg-yellow-700/60 text-inherit rounded-sm">$1</mark>',
     );
   }
   let highlightHits = $derived.by(() => {
@@ -852,6 +852,9 @@
     return dismissOnOutside(exportMenuEl, () => (showExportMenu = false));
   });
   let showProfilesModal = $state(false);
+  // Tracks whether Profiles was opened from inside Settings, so closing
+  // Profiles can restore Settings rather than dropping to the main view.
+  let openProfilesFromSettings = $state(false);
   const iconBtnCls = "p-1.5 rounded bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300";
 
   let selectedSet = $state(new Set<number>());
@@ -1186,8 +1189,8 @@
         }`}></span>
     </span>
 
-    {#if profiles.length > 0}
-      <div class="flex items-center gap-px">
+    <div class="flex items-center gap-px">
+      {#if profiles.length > 0}
         <Combobox
           items={profiles.map((p) => ({ value: p.name, label: p.name, hint: p.filter }))}
           value={activeProfile}
@@ -1202,8 +1205,15 @@
           onclick={() => (showProfilesModal = true)}>
           <Icon name="edit" size={14} />
         </button>
-      </div>
-    {/if}
+      {/if}
+      <button
+        class="px-1.5 py-1 rounded bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
+        title="Save current filter as profile"
+        aria-label="save profile"
+        onclick={() => (showSaveProfile = true)}>
+        <Icon name="save" size={14} />
+      </button>
+    </div>
 
     <div class="relative flex-1 min-w-0">
       <span class="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-400">
@@ -1253,13 +1263,6 @@
       aria-label="clear"
       onclick={clear}>
       <Icon name="trash" size={16} />
-    </button>
-    <button
-      class={iconBtnCls}
-      title="Save current filter as profile"
-      aria-label="save profile"
-      onclick={() => (showSaveProfile = true)}>
-      <Icon name="save" size={16} />
     </button>
     <button
       class={iconBtnCls}
@@ -1495,7 +1498,7 @@
       onscroll={onScroll}
       class="flex-1 overflow-y-auto mono text-xs">
       <div bind:this={headerEl} class="sticky top-0 z-10 bg-zinc-50 dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800">
-        <ColumnHeader {columns} {showTimestamps} />
+        <ColumnHeader {columns} {showTimestamps} onChange={onColumnsChange} />
       </div>
       {#if pinnedEntries.length > 0}
         <div bind:this={pinnedEl} class="sticky z-10 bg-amber-50 dark:bg-amber-950/60 border-b border-amber-300/40 dark:border-amber-700/40"
@@ -1696,7 +1699,7 @@
       } catch {}
       window.location.reload();
     }}
-    onOpenProfiles={() => { showSettings = false; showProfilesModal = true; }}
+    onOpenProfiles={() => { openProfilesFromSettings = true; showSettings = false; showProfilesModal = true; }}
     onClose={() => (showSettings = false)} />
 {/if}
 
@@ -1705,11 +1708,18 @@
     {profiles}
     {activeProfile}
     currentFilter={filter}
-    onClose={() => (showProfilesModal = false)}
+    onClose={() => {
+      showProfilesModal = false;
+      if (openProfilesFromSettings) {
+        openProfilesFromSettings = false;
+        showSettings = true;
+      }
+    }}
     onChanged={refreshProfiles}
     onActivate={(name) => {
       selectProfile(name);
       showProfilesModal = false;
+      openProfilesFromSettings = false;
     }} />
 {/if}
 

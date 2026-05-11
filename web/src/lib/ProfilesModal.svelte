@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tick } from "svelte";
-  import type { Profile } from "./types";
+  import type { Profile, SourceRef } from "./types";
   import Icon from "./Icon.svelte";
 
   let dialogEl: HTMLDivElement | null = $state(null);
@@ -162,6 +162,13 @@
                     <span class="font-medium truncate">{p.name}</span>
                     {#if p.name === activeProfile}
                       <span class="text-[10px] px-1.5 py-0.5 rounded bg-sky-600/15 text-sky-700 dark:text-sky-400">active</span>
+                    {/if}
+                    {#if p.sources?.length}
+                      <span
+                        class="text-[10px] px-1.5 py-0.5 rounded bg-zinc-200 dark:bg-zinc-700/60 text-zinc-700 dark:text-zinc-300"
+                        title={p.sources.map((s: SourceRef) => `${s.kind}: ${s.name}`).join("\n")}>
+                        {p.sources.length} {p.sources.length === 1 ? "source" : "sources"}
+                      </span>
                     {/if}
                   </div>
                   {#if p.filter}

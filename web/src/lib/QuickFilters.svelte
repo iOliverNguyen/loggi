@@ -19,6 +19,7 @@
 
   let chips = $state<QuickChip[]>(loadQuickChips());
   let menuOpen = $state(false);
+  let pinnedExpanded = $state(false);
   let overflowEl: HTMLDivElement | null = $state(null);
   let containerEl: HTMLDivElement | null = $state(null);
   let listEl: HTMLDivElement | null = $state(null);
@@ -66,9 +67,13 @@
     chips = loadQuickChips();
   }
 
-  function pinFromOverflow(label: string) {
+  function pin(label: string) {
     setChipPinned(label, true);
     chips = loadQuickChips();
+  }
+
+  function pinFromOverflow(label: string) {
+    pin(label);
   }
 
   function measure() {
@@ -127,38 +132,56 @@
       buttons[next]?.focus();
     }
   }}>
-  {#if pinnedChips.length > 0}
-    <span class="text-zinc-500 shrink-0 inline-flex items-center gap-1">
-      <Icon name="pin" size={11} class="opacity-60" /> Pinned:
-    </span>
-    <div class="flex items-center gap-1.5 shrink-0">
-      {#each pinnedChips as c, i (c.label)}
-        {@const enabled = c.enabled !== false}
-        <span class="chip-wrap group relative inline-flex items-center">
-          <button
-            class="px-2 py-0.5 rounded text-[11px] mono whitespace-nowrap transition-colors inline-flex items-center gap-1"
-            class:bg-amber-500={enabled}
-            class:text-white={enabled}
-            class:bg-zinc-100={!enabled}
-            class:dark:bg-zinc-800={!enabled}
-            class:opacity-50={!enabled}
-            title={`${c.expr || "no filter"} — click to ${enabled ? "disable" : "enable"}${i < 9 ? ` (Shift+${i + 1})` : ""}`}
-            onclick={() => toggleEnabled(c.label)}>
-            {#if enabled}<Icon name="check" size={10} />{/if}
-            {c.label}
-          </button>
-          <button
-            class="opacity-0 group-hover:opacity-100 absolute -top-1 -right-1 w-3.5 h-3.5 rounded-full bg-zinc-700 dark:bg-zinc-200 text-white dark:text-zinc-900 text-[9px] flex items-center justify-center"
-            title="unpin"
-            onclick={() => unpin(c.label)}>×</button>
-        </span>
-      {/each}
-    </div>
-    <span class="shrink-0 text-zinc-300 dark:text-zinc-700">·</span>
-  {/if}
-
   <span class="text-zinc-500 shrink-0">Quick:</span>
-  <div bind:this={listEl} class="quick-list flex items-center gap-1.5 min-w-0 flex-1 overflow-hidden">
+  {#if pinnedChips.length > 0}
+    <button
+      class="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] mono whitespace-nowrap bg-amber-500/15 text-amber-700 dark:text-amber-300 hover:bg-amber-500/25"
+      title={pinnedExpanded ? "Collapse pinned filters" : "Expand pinned filters"}
+      aria-expanded={pinnedExpanded}
+      onclick={() => (pinnedExpanded = !pinnedExpanded)}>
+      <Icon name="pin" size={10} />
+      {pinnedChips.length}
+      <Icon name={pinnedExpanded ? "chevron-down" : "chevron-right"} size={10} />
+    </button>
+    {#if pinnedExpanded}
+      <div class="flex items-center gap-1.5 shrink-0">
+        {#each pinnedChips as c, i (c.label)}
+          {@const enabled = c.enabled !== false}
+          <span class="chip-wrap group relative inline-flex items-center">
+            <button
+              class="relative px-2 py-0.5 rounded text-[11px] mono whitespace-nowrap transition-colors"
+              class:bg-amber-500={enabled}
+              class:text-white={enabled}
+              class:bg-zinc-100={!enabled}
+              class:dark:bg-zinc-800={!enabled}
+              title={`${c.expr || "no filter"} — click to ${enabled ? "disable" : "enable"}${i < 9 ? ` (Shift+${i + 1})` : ""}`}
+              onclick={() => toggleEnabled(c.label)}>
+              {c.label}
+              {#if !enabled}
+                <span class="pointer-events-none absolute left-1 right-1 bottom-0.5 h-0.5 bg-amber-500 opacity-50 rounded-full"></span>
+              {/if}
+            </button>
+            <span class="chip-actions opacity-0 group-hover:opacity-100 focus-within:opacity-100 absolute -top-1.5 -right-1 inline-flex items-center gap-px">
+              <button
+                class="w-3.5 h-3.5 rounded-full bg-zinc-700 dark:bg-zinc-200 text-white dark:text-zinc-900 flex items-center justify-center"
+                title="unpin"
+                aria-label="unpin"
+                onclick={() => unpin(c.label)}>
+                <Icon name="pin" size={9} />
+              </button>
+              <button
+                class="w-3.5 h-3.5 rounded-full bg-zinc-700 dark:bg-zinc-200 text-white dark:text-zinc-900 text-[9px] flex items-center justify-center"
+                title="remove"
+                aria-label="remove"
+                onclick={() => remove(c.label)}>×</button>
+            </span>
+          </span>
+        {/each}
+      </div>
+    {/if}
+    <span class="shrink-0 w-px h-4 bg-zinc-300 dark:bg-zinc-700"></span>
+  {/if}
+  <div bind:this={listEl} class="quick-list flex items-center gap-1.5 min-w-0 flex-1 overflow-x-clip overflow-y-visible">
     {#each workingChips as c, i (c.label)}
       <span
         class="chip-wrap group relative inline-flex items-center"
@@ -174,10 +197,20 @@
           class:dark:hover:bg-zinc-700={!isActive(c.expr)}
           title={c.expr || "no filter"}
           onclick={() => onApply(c.expr)}>{c.label}</button>
-        <button
-          class="opacity-0 group-hover:opacity-100 absolute -top-1 -right-1 w-3.5 h-3.5 rounded-full bg-zinc-700 dark:bg-zinc-200 text-white dark:text-zinc-900 text-[9px] flex items-center justify-center"
-          title="remove"
-          onclick={() => remove(c.label)}>×</button>
+        <span class="chip-actions opacity-0 group-hover:opacity-100 focus-within:opacity-100 absolute -top-1.5 -right-1 inline-flex items-center gap-px">
+          <button
+            class="w-3.5 h-3.5 rounded-full bg-zinc-700 dark:bg-zinc-200 text-white dark:text-zinc-900 flex items-center justify-center"
+            title="pin"
+            aria-label="pin"
+            onclick={() => pin(c.label)}>
+            <Icon name="pin" size={9} />
+          </button>
+          <button
+            class="w-3.5 h-3.5 rounded-full bg-zinc-700 dark:bg-zinc-200 text-white dark:text-zinc-900 text-[9px] flex items-center justify-center"
+            title="remove"
+            aria-label="remove"
+            onclick={() => remove(c.label)}>×</button>
+        </span>
       </span>
     {/each}
   </div>

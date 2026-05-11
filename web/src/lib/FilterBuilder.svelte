@@ -10,6 +10,7 @@
   import { BUILTINS as COLUMN_BUILTINS } from "./columns";
   import Icon from "./Icon.svelte";
   import Combobox from "./Combobox.svelte";
+  import { type QuickChip, QUICK_CHANGED, loadQuickChips } from "./quick-filters";
 
   let {
     expression,
@@ -111,6 +112,15 @@
     const ops = defaultOpsForField(newField);
     if (!ops.includes(newOp)) newOp = ops[0]!;
   });
+
+  let chips = $state<QuickChip[]>(loadQuickChips());
+  let pinExpanded = $state(false);
+  $effect(() => {
+    const onChanged = () => (chips = loadQuickChips());
+    window.addEventListener(QUICK_CHANGED, onChanged);
+    return () => window.removeEventListener(QUICK_CHANGED, onChanged);
+  });
+  let enabledPinnedChips = $derived(chips.filter((c) => c.pinned && c.enabled !== false));
 </script>
 
 <div class="text-sm">
@@ -144,6 +154,32 @@
       </button>
     </div>
   </div>
+
+  {#if enabledPinnedChips.length > 0}
+    <div class="mb-2">
+      <button
+        class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] mono whitespace-nowrap bg-amber-500/15 text-amber-700 dark:text-amber-300 hover:bg-amber-500/25"
+        title={pinExpanded ? "Collapse pinned filters" : "Expand pinned filters"}
+        aria-expanded={pinExpanded}
+        onclick={() => (pinExpanded = !pinExpanded)}>
+        <Icon name="pin" size={10} />
+        {enabledPinnedChips.length} pinned filter{enabledPinnedChips.length === 1 ? "" : "s"}
+        <Icon name={pinExpanded ? "chevron-down" : "chevron-right"} size={10} />
+      </button>
+      {#if pinExpanded}
+        <ul class="mt-1.5 space-y-0.5">
+          {#each enabledPinnedChips as c (c.label)}
+            <li class="flex items-center gap-1.5 px-1.5 py-0.5 rounded bg-amber-500/15 text-[11px]">
+              <span class="text-amber-700 dark:text-amber-300 font-medium shrink-0">{c.label}</span>
+              <code
+                class="mono truncate text-[10px] text-amber-700/80 dark:text-amber-300/80"
+                title={c.expr}>{c.expr || "(no filter)"}</code>
+            </li>
+          {/each}
+        </ul>
+      {/if}
+    </div>
+  {/if}
 
   {#if parsed.advanced}
     <p class="text-[11px] text-zinc-500 mb-2">
