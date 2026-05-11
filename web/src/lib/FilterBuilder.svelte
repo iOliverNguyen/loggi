@@ -16,14 +16,12 @@
     expression,
     discoveredFields,
     onApply,
-    onShowHelp,
-    onSaveQuick,
+    showAdd = $bindable(false),
   } = $props<{
     expression: string;
     discoveredFields: Set<string>;
     onApply: (expr: string) => void;
-    onShowHelp?: () => void;
-    onSaveQuick?: () => void;
+    showAdd?: boolean;
   }>();
 
   // Built-in fields the server treats specially or always exposes.
@@ -57,7 +55,6 @@
   // hide the chips and show "Advanced — edit raw" instead.
   let parsed = $derived(parseClauses(expression));
 
-  let showAdd = $state(false);
   let newField = $state("level");
   let newOp = $state<ClauseOp>("eq");
   let newValue = $state("");
@@ -124,37 +121,6 @@
 </script>
 
 <div class="text-sm">
-  <div class="flex items-center justify-between mb-2">
-    <h2 class="font-semibold">Filters</h2>
-    <div class="flex items-center gap-1">
-      {#if onSaveQuick}
-        <button
-          class="p-1 rounded text-zinc-500 hover:text-sky-600 dark:hover:text-sky-400 hover:bg-zinc-200 dark:hover:bg-zinc-800"
-          title="Save current filter as a quick chip"
-          aria-label="save quick filter"
-          onclick={onSaveQuick}>
-          <Icon name="save" size={12} />
-        </button>
-      {/if}
-      {#if onShowHelp}
-        <button
-          class="p-1 rounded text-zinc-500 hover:text-sky-600 dark:hover:text-sky-400 hover:bg-zinc-200 dark:hover:bg-zinc-800"
-          title="Filter syntax help"
-          aria-label="filter help"
-          onclick={onShowHelp}>
-          <Icon name="help" size={12} />
-        </button>
-      {/if}
-      <button
-        class="p-1 rounded bg-sky-600 text-white hover:bg-sky-700"
-        title="Add a filter clause"
-        aria-label="add clause"
-        onclick={() => (showAdd = !showAdd)}>
-        <Icon name="plus" size={12} />
-      </button>
-    </div>
-  </div>
-
   {#if enabledPinnedChips.length > 0}
     <div class="mb-2">
       <button

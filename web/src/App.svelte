@@ -7,6 +7,9 @@
   import DetailPanel from "./lib/DetailPanel.svelte";
   import AddSourceTabs from "./lib/AddSourceTabs.svelte";
   import FilterBuilder from "./lib/FilterBuilder.svelte";
+  import SidebarSection from "./lib/SidebarSection.svelte";
+  import FacetPanel from "./lib/FacetPanel.svelte";
+  import { SvelteMap, SvelteSet } from "svelte/reactivity";
   import SaveProfileModal from "./lib/SaveProfileModal.svelte";
   import ProfilesModal from "./lib/ProfilesModal.svelte";
   import HelpModal from "./lib/HelpModal.svelte";
@@ -161,9 +164,23 @@
   let bottomPad = $derived(Math.max(0, (entries.length - endIndex) * rowH));
 
   let showAddSource = $state(false);
+  let filtersOpen = $state<boolean | undefined>(undefined);
+  let sourcesOpen = $state<boolean | undefined>(undefined);
+  let filterAddClause = $state(false);
   let showFilters = $state((localStorage.getItem("loggi.showFilters") ?? "1") !== "0");
   $effect(() => {
     try { localStorage.setItem("loggi.showFilters", showFilters ? "1" : "0"); } catch {}
+  });
+  let sidebarWidth = $state(parseInt(localStorage.getItem("loggi.sidebar.width") ?? "256", 10));
+  let sidebarResizing = $state(false);
+  $effect(() => { try { localStorage.setItem("loggi.sidebar.width", String(sidebarWidth)); } catch {} });
+  $effect(() => {
+    if (!sidebarResizing) return;
+    const onMove = (e: PointerEvent) => { sidebarWidth = Math.max(200, Math.min(640, e.clientX)); };
+    const onUp = () => { sidebarResizing = false; };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp, { once: true });
+    return () => { window.removeEventListener("pointermove", onMove); };
   });
 
   // Highlight regex/hit count derive after `entries` and `highlight` are
@@ -265,6 +282,7 @@
         // again.
         historyExhausted = false;
         historyLoading = false;
+        resetFacets();
         bus!.send({
           type: "subscribe",
           subscribe: { sub_id: SUB_ID, filter: effectiveFilterFor(filter), history_n: INITIAL_HISTORY },
@@ -314,6 +332,9 @@
         // Server confirmed removal — drop entirely so re-adding doesn't
         // produce a phantom duplicate row.
         sources = sources.filter((s) => s.id !== ev.source_id);
+        const before = entries.length;
+        entries = entries.filter((e) => e.source_id !== ev.source_id);
+        if (entries.length !== before) rebuildFacets();
         return;
       }
       // Match optimistic placeholders (negative id) by (kind, name) so
@@ -398,11 +419,11 @@
 
   // discoveredFields accumulates dotted paths seen in entry.fields so the
   // filter builder can offer them as columns. Bounded to keep memory tight.
-  let discoveredFields = $state(new Set<string>());
+  let discoveredFields = new SvelteSet<string>();
   // fieldValues tracks distinct values seen per top-level field, keyed
   // by frequency, so the filter autocomplete can offer real values.
   // Capped at 50 values per field; eviction by lowest count.
-  let fieldValues = $state(new Map<string, Map<string, number>>());
+  let fieldValues = new SvelteMap<string, SvelteMap<string, number>>();
   const VALUES_PER_FIELD = 50;
 
   function bumpFieldValue(field: string, value: string) {
@@ -410,7 +431,7 @@
     if (value.length > 200) return; // skip absurd payloads
     let m = fieldValues.get(field);
     if (!m) {
-      m = new Map();
+      m = new SvelteMap();
       fieldValues.set(field, m);
     }
     m.set(value, (m.get(value) ?? 0) + 1);
@@ -442,14 +463,24 @@
         collectFieldPaths(v, path);
       }
     }
-    discoveredFields = discoveredFields; // notify Svelte
-    fieldValues = fieldValues;
   }
 
   function collectBuiltinValues(e: Entry) {
     if (e.service) bumpFieldValue("service", e.service);
     if (e.level) bumpFieldValue("level", e.level);
-    fieldValues = fieldValues;
+  }
+
+  function resetFacets() {
+    discoveredFields.clear();
+    fieldValues.clear();
+  }
+
+  function rebuildFacets() {
+    resetFacets();
+    for (const e of entries) {
+      collectFieldPaths(e.fields);
+      collectBuiltinValues(e);
+    }
   }
 
   function requestHistory() {
@@ -532,6 +563,7 @@
     lastSentFilter = eff;
     bus?.send({ type: "filter", filter: { sub_id: SUB_ID, filter: eff } });
     entries = [];
+    resetFacets();
     dropped = 0;
     lastError = "";
     historyExhausted = false;
@@ -689,6 +721,16 @@
     }
     pendingFilter = next ? `${next} ${clause}` : clause;
     applyFilter();
+  }
+
+  function removeFilterClause(clause: string) {
+    const tokens = pendingFilter.trim().split(/\s+/).filter((t) => t && t !== clause);
+    pendingFilter = tokens.join(" ");
+    applyFilter();
+  }
+
+  function isFilterClauseActive(clause: string): boolean {
+    return pendingFilter.trim().split(/\s+/).includes(clause);
   }
 
   function replaceFilterClause(clause: string) {
@@ -1288,7 +1330,7 @@
       aria-label="toggle filter sidebar"
       aria-pressed={showFilters}
       onclick={() => (showFilters = !showFilters)}>
-      <Icon name="filter" size={16} />
+      <Icon name="panel-left" size={16} />
     </button>
     <button
       class={showTimeline
@@ -1393,45 +1435,82 @@
     <!-- sidebar -->
     {#if showFilters}
     <aside
-      class="w-64 border-r border-zinc-200 dark:border-zinc-800 p-3 text-sm overflow-y-auto">
-      <FilterBuilder
-        expression={filter}
-        {discoveredFields}
-        onApply={(expr) => {
-          pendingFilter = expr;
-          applyFilter();
-        }}
-        onShowHelp={() => {
-          helpInitialTab = "syntax";
-          showHelp = true;
-        }}
-        onSaveQuick={() => requestSaveQuick(pendingFilter)} />
-      <div class="border-t border-zinc-200 dark:border-zinc-800 my-3"></div>
+      class="relative border-r border-zinc-200 dark:border-zinc-800 p-3 text-sm overflow-y-auto shrink-0"
+      style="width: {sidebarWidth}px">
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        class="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-sky-500/40"
+        class:bg-sky-500={sidebarResizing}
+        onpointerdown={(e) => { e.preventDefault(); sidebarResizing = true; }}></div>
+      <SidebarSection id="filters" label="Filters" bind:open={filtersOpen}>
+        {#snippet headerExtra({ open })}
+          {#if open}
+            <button
+              class="p-1 rounded text-zinc-500 hover:text-sky-600 dark:hover:text-sky-400 hover:bg-zinc-200 dark:hover:bg-zinc-800"
+              title="Save current filter as a quick chip"
+              aria-label="save quick filter"
+              onclick={(e) => { e.stopPropagation(); requestSaveQuick(pendingFilter); }}>
+              <Icon name="save" size={12} />
+            </button>
+          {/if}
+          <button
+            class="p-1 rounded text-zinc-500 hover:text-sky-600 dark:hover:text-sky-400 hover:bg-zinc-200 dark:hover:bg-zinc-800"
+            title="Filter syntax help"
+            aria-label="filter help"
+            onclick={(e) => { e.stopPropagation(); helpInitialTab = "syntax"; showHelp = true; }}>
+            <Icon name="help" size={12} />
+          </button>
+          <button
+            class="p-1 rounded bg-sky-600 text-white hover:bg-sky-700"
+            title="Add a filter clause"
+            aria-label="add clause"
+            onclick={(e) => { e.stopPropagation(); filtersOpen = true; filterAddClause = !filterAddClause; }}>
+            <Icon name="plus" size={12} />
+          </button>
+        {/snippet}
+        <FilterBuilder
+          expression={filter}
+          {discoveredFields}
+          bind:showAdd={filterAddClause}
+          onApply={(expr) => {
+            pendingFilter = expr;
+            applyFilter();
+          }} />
+      </SidebarSection>
 
-      <div class="flex items-center justify-between mb-2">
-        <h2 class="font-semibold">Sources</h2>
-        <button
-          class="p-1 rounded bg-sky-600 text-white hover:bg-sky-700"
-          onclick={() => (showAddSource = !showAddSource)}
-          title="Add source"
-          aria-label="add source">
-          <Icon name="plus" size={12} />
-        </button>
-      </div>
+      <SidebarSection id="facets" label="Facets" count={fieldValues.size}>
+        <FacetPanel
+          {fieldValues}
+          {pendingFilter}
+          onAddClause={addFilterClause}
+          onRemoveClause={removeFilterClause}
+          onReplace={filterOnlyClause}
+          isClauseActive={isFilterClauseActive} />
+      </SidebarSection>
 
-      {#if showAddSource}
-        <AddSourceTabs
-          onAdd={addSource}
-          onClose={() => (showAddSource = false)} />
-      {/if}
-
-      {#if sources.length === 0}
-        <p class="text-zinc-500 text-xs">
-          No sources. Click + to add or run
-          <code class="mono">loggi tail file.log</code>.
-        </p>
-      {/if}
-      {#each sources as src}
+      <SidebarSection id="sources" label="Sources" count={sources.length} bind:open={sourcesOpen}>
+        {#snippet headerExtra()}
+          <button
+            class="p-1 rounded bg-sky-600 text-white hover:bg-sky-700"
+            onclick={(e) => { e.stopPropagation(); sourcesOpen = true; showAddSource = !showAddSource; }}
+            title="Add source"
+            aria-label="add source">
+            <Icon name="plus" size={12} />
+          </button>
+        {/snippet}
+        {#if showAddSource}
+          <AddSourceTabs
+            onAdd={addSource}
+            onClose={() => (showAddSource = false)} />
+        {/if}
+        {#if sources.length === 0}
+          <p class="text-zinc-500 text-xs">
+            No sources. Click + to add or run
+            <code class="mono">loggi tail file.log</code>.
+          </p>
+        {/if}
+        {#each sources as src}
         {@const health = sourceHealthDot(src)}
         {@const muted = isSourceMuted(filter, src.name)}
         {@const soloed = isSourceSoloed(filter, src.name)}
@@ -1477,6 +1556,7 @@
           {/if}
         </div>
       {/each}
+      </SidebarSection>
     </aside>
     {/if}
 
@@ -1497,9 +1577,11 @@
                  tabindex="0"
                  onclick={() => selectRow(p.seq)}
                  onkeydown={(ev) => ev.key === "Enter" && selectRow(p.seq)}>
-              <span class="absolute left-0 top-0 bottom-0 w-1"
-                    style="background-color: {sourceColor(p.source_id)}"
-                    title={sourceName(p.source_id)}></span>
+              {#if sources.length > 1}
+                <span class="absolute left-0 top-0 bottom-0 w-1"
+                      style="background-color: {sourceColor(p.source_id)}"
+                      title={sourceName(p.source_id)}></span>
+              {/if}
               <span class="shrink-0 w-3 text-amber-600">📌</span>
               <LogRow
                 entry={p}
@@ -1544,10 +1626,12 @@
           onclick={(ev) => rowClick(ev, e.seq)}
           oncontextmenu={(ev) => openContextMenu(ev, e)}
           onkeydown={(ev) => ev.key === "Enter" && selectRow(e.seq)}>
-          <span
-            class="absolute left-0 top-0 bottom-0 w-1"
-            style="background-color: {sourceColor(e.source_id)}"
-            title={sourceName(e.source_id)}></span>
+          {#if sources.length > 1}
+            <span
+              class="absolute left-0 top-0 bottom-0 w-1"
+              style="background-color: {sourceColor(e.source_id)}"
+              title={sourceName(e.source_id)}></span>
+          {/if}
           <div class="flex gap-3">
             <LogRow
               entry={e}

@@ -9,7 +9,7 @@
     | "filter" | "columns" | "rows" | "pin" | "plus" | "minus" | "x"
     | "refresh" | "copy" | "edit" | "check" | "chevron-down"
     | "chevron-right" | "star" | "star-filled" | "diff" | "link"
-    | "chart-bar" | "grip" | "crosshair";
+    | "chart-bar" | "grip" | "crosshair" | "panel-left";
 
   let { name, size = 16, class: cls = "" } = $props<{
     name: IconName;
@@ -50,6 +50,7 @@
     "chart-bar": "M3 21V10M9 21V4M15 21V13M21 21V7M2 21h20",
     grip: "M9 5h.01M9 12h.01M9 19h.01M15 5h.01M15 12h.01M15 19h.01",
     crosshair: "M12 2v4 M12 18v4 M2 12h4 M18 12h4 M12 18a6 6 0 100-12 6 6 0 000 12z",
+    "panel-left": "M3 3h18v18H3zM9 3v18",
   };
 
   let path = $derived(PATHS[name as IconName]);
