@@ -33,6 +33,25 @@ run-build() {
   p-success "loggi binary built ($(ls -lh loggi | awk '{print $5}'))"
 }
 
+run-build-all() {
+  usage-prompt "./run build-all — one-shot setup: check tools, build SPA, build loggi" "$1"
+
+  local missing=0
+  command -v go   >/dev/null 2>&1 || { p-error "go not found — install from https://go.dev/dl/"; missing=1; }
+  command -v node >/dev/null 2>&1 || { p-error "node not found — install Node 20+ (https://nodejs.org or 'nvm install 20')"; missing=1; }
+  command -v pnpm >/dev/null 2>&1 || { p-error "pnpm not found — install with 'npm install -g pnpm' or 'corepack enable'"; missing=1; }
+  [ "$missing" -eq 0 ] || exit 1
+
+  p-info "toolchain ok ($(go version | awk '{print $3}'), node $(node -v), pnpm $(pnpm -v))"
+
+  run-build-web
+
+  p-info "go build ./cmd/loggi → ./loggi"
+  cd "$PROJECT_ROOT" && go build -o loggi ./cmd/loggi
+
+  p-success "loggi built ($(ls -lh loggi | awk '{print $5}')) — try ./loggi tail <file>  or  ./run server"
+}
+
 run-dev-web() {
   usage-prompt "./run dev-web — run the Vite dev server with HMR" "$1"
   p-info "vite dev server (proxies /ws and /api to a running loggi server)"
