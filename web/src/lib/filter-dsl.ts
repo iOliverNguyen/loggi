@@ -209,7 +209,7 @@ function parseRegexLiteral(value: string): { pattern: string; flags: string } | 
 function parseTerm(raw: string): Clause | null {
   let negate = false;
   let s = raw;
-  if (s.startsWith("-") && s.length > 1) {
+  if ((s.startsWith("-") || s.startsWith("!")) && s.length > 1) {
     negate = true;
     s = s.slice(1);
   }
@@ -386,7 +386,7 @@ export function withTimeRange(expr: string, lo: number | null, hi: number | null
   const kept: string[] = [];
   for (const t of tokens) {
     let bare = t;
-    if (bare.startsWith("-")) bare = bare.slice(1);
+    if (bare.startsWith("-") || bare.startsWith("!")) bare = bare.slice(1);
     if (bare.startsWith("@")) bare = bare.slice(1);
     if (bare === "ts" || bare.startsWith("ts:")) continue;
     kept.push(t);

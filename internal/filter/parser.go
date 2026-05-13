@@ -4,7 +4,7 @@
 //   expr      := orExpr
 //   orExpr    := andExpr ("OR" andExpr)*
 //   andExpr   := notExpr (("AND" | <ws>) notExpr)*
-//   notExpr   := ("-" | "NOT")? atom
+//   notExpr   := ("-" | "!" | "NOT")? atom
 //   atom      := "(" expr ")" | term
 //   term      := fieldTerm | bareTerm
 //   fieldTerm := fieldRef ":" value
@@ -175,6 +175,24 @@ func (p *parser) tokenize() {
 			j := consumeGlobRun(s, i)
 			p.toks = append(p.toks, token{kind: tStar, text: s[i:j], pos: i})
 			i = j
+			continue
+		case '!':
+			// `!` is an alias for `-` as a NOT prefix. Has no unary-minus
+			// meaning, so the only branches are NOT-vs-glob-run.
+			if i+1 < len(s) {
+				c2 := s[i+1]
+				if isIdentStart(c2) || c2 == '(' || c2 == '@' || c2 == '"' {
+					p.toks = append(p.toks, token{kind: tDash, text: "!", pos: i})
+					i++
+					continue
+				}
+				j := consumeGlobRun(s, i)
+				p.toks = append(p.toks, token{kind: tStar, text: s[i:j], pos: i})
+				i = j
+				continue
+			}
+			p.toks = append(p.toks, token{kind: tDash, text: "!", pos: i})
+			i++
 			continue
 		case '-':
 			// `-` has three possible meanings:
