@@ -125,6 +125,15 @@ type SourceEvent struct {
 	State    string `json:"state"`           // "open" | "closed" | "error"
 	Mode     string `json:"mode,omitempty"`  // "json" | "text"
 	Detail   string `json:"detail,omitempty"`
+	// Columns carries auto-detected or persisted column recommendations
+	// for this (kind, name) source. Populated by the server in two cases:
+	//   1) On snapshot/source-open, mirroring any stored SourcePref.
+	//   2) When the column-detection sampler closes its window and emits
+	//      a fresh recommendation for a never-seen source.
+	// Empty in normal state-change events (e.g. mode upgrades). Frontend
+	// installs the list only if the user hasn't manually edited columns
+	// for this source key already.
+	Columns []string `json:"columns,omitempty"`
 }
 
 type Snapshot struct {

@@ -2,18 +2,24 @@
   import { tick } from "svelte";
   import Icon from "./Icon.svelte";
   import ColumnReorderList from "./ColumnReorderList.svelte";
-  import { type Column, BUILTINS } from "./columns";
+  import { type Column, type ColumnsBySource, BUILTINS } from "./columns";
 
   let {
     columns,
     discoveredFields,
     hotColumns,
+    sourceRecommendations,
     onChange,
     onClose,
   } = $props<{
     columns: Column[];
     discoveredFields: Set<string>;
     hotColumns: string[];
+    // Per-source column recommendations seen in this session. Surfaced
+    // here as "Apply <source>'s recommended columns" actions so the user
+    // can switch column sets when filtering to one source. Keys are
+    // "kind:name" — we split for display.
+    sourceRecommendations?: ColumnsBySource;
     onChange: (cols: Column[]) => void;
     onClose: () => void;
   }>();
@@ -103,6 +109,32 @@
         <h3 class="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold mb-2">Active</h3>
         <ColumnReorderList {columns} onChange={patch} onRemove={remove} />
       </section>
+
+      {#if sourceRecommendations && Object.keys(sourceRecommendations).length > 0}
+        <section>
+          <h3 class="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold mb-2">Detected per source</h3>
+          <ul class="space-y-1">
+            {#each Object.entries(sourceRecommendations) as entry}
+              {@const key = entry[0]}
+              {@const cols = entry[1] as Column[]}
+              {@const [kind, ...rest] = key.split(":")}
+              {@const name = rest.join(":")}
+              <li class="flex items-center justify-between gap-2 text-[11px]">
+                <span class="truncate text-zinc-700 dark:text-zinc-300 mono" title={key}>
+                  {kind}<span class="text-zinc-400">:</span>{name}
+                </span>
+                <button
+                  type="button"
+                  class="px-2 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 hover:bg-sky-50 dark:hover:bg-sky-950/40 text-[11px]"
+                  title="Replace active columns with this source's detected set"
+                  onclick={() => patch(cols.map((c: Column) => ({ ...c })))}>
+                  apply
+                </button>
+              </li>
+            {/each}
+          </ul>
+        </section>
+      {/if}
 
       <section>
         <div class="flex items-center justify-between mb-2">

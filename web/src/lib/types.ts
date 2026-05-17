@@ -38,6 +38,10 @@ export interface SourceEventWire {
   state: string;
   mode?: string;
   detail?: string;
+  // Auto-detected or persisted column ids for this (kind, name) source.
+  // Populated on snapshot (from disk) and on the source event the server
+  // emits when the detection sampler closes a fresh recommendation.
+  columns?: string[];
 }
 
 export interface SourceRef {

@@ -56,6 +56,7 @@ func (s *Server) serveHTTP(l net.Listener) {
 	mux.HandleFunc("/api/export", s.handleAPIExport)
 	mux.HandleFunc("/api/health", s.handleAPIHealth)
 	mux.HandleFunc("/api/columns", s.handleAPIColumns)
+	mux.HandleFunc("/api/source-prefs", s.handleAPISourcePrefs)
 	mux.HandleFunc("/api/histogram", s.handleAPIHistogram)
 	if s.opts.Debug {
 		mux.HandleFunc("/api/debug/filter", s.handleAPIDebugFilter)
@@ -414,14 +415,104 @@ func (s *Server) handleSourceRemove(w http.ResponseWriter, r *http.Request) {
 //   - `hot`: names of currently-promoted hot columns (live snapshot)
 //   - `well_known`: pre-allocated hot field names — the canonical list
 //     of fields the parser/autocomplete should treat as bare identifiers
+//   - `by_source`: per-source column preferences, keyed by "kind:name".
+//     Includes both auto-detected and user-curated entries from disk.
 //
 // The frontend reads `well_known` instead of carrying a duplicate copy.
 func (s *Server) handleAPIColumns(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	bySource := map[string][]string{}
+	if user, err := config.LoadUser(); err == nil {
+		for _, p := range user.SourcePrefs {
+			bySource[p.Kind+":"+p.Name] = p.Columns
+		}
+	}
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"hot":        s.store.HotColumnNames(),
 		"well_known": store.WellKnownHotFields,
+		"by_source":  bySource,
 	})
+}
+
+// sourcePrefBody is the request schema for PUT /api/source-prefs. A
+// client-curated set always locks the entry — once the user has touched
+// columns for a source, future auto-detection is suppressed.
+type sourcePrefBody struct {
+	Kind    string   `json:"kind"`
+	Name    string   `json:"name"`
+	Columns []string `json:"columns"`
+}
+
+// handleAPISourcePrefs handles GET (list all) and PUT (upsert one).
+// DELETE removes a specific (kind, name) entry — useful to clear a
+// curated set and let detection re-run on the next attach.
+func (s *Server) handleAPISourcePrefs(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		user, err := config.LoadUser()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"prefs": user.SourcePrefs})
+
+	case http.MethodPut:
+		dec := json.NewDecoder(r.Body)
+		dec.DisallowUnknownFields()
+		var body sourcePrefBody
+		if err := dec.Decode(&body); err != nil {
+			http.Error(w, "invalid JSON body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if body.Kind == "" || body.Name == "" {
+			http.Error(w, "kind and name are required", http.StatusBadRequest)
+			return
+		}
+		s.persistSourcePref(body.Kind, body.Name, body.Columns)
+		// Update the in-memory pinnedColumns so subsequent /api/sources
+		// snapshots reflect the change without forcing a reconnect.
+		s.srcMu.Lock()
+		for _, rec := range s.srcs {
+			if string(rec.src.Kind()) == body.Kind && rec.src.Name() == body.Name {
+				rec.pinnedColumns = body.Columns
+				rec.detector = nil // user took over; suppress further detection
+			}
+		}
+		s.srcMu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+
+	case http.MethodDelete:
+		kind := r.URL.Query().Get("kind")
+		name := r.URL.Query().Get("name")
+		if kind == "" || name == "" {
+			http.Error(w, "kind and name query params required", http.StatusBadRequest)
+			return
+		}
+		user, err := config.LoadUser()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		out := user.SourcePrefs[:0]
+		for _, p := range user.SourcePrefs {
+			if p.Kind == kind && p.Name == name {
+				continue
+			}
+			out = append(out, p)
+		}
+		user.SourcePrefs = out
+		if err := config.SaveUser(user); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 func (s *Server) handleAPIHealth(w http.ResponseWriter, _ *http.Request) {

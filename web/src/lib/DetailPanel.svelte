@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Entry, SourceInfo } from "./types";
   import { ansiToHTML } from "./ansi";
+  import { readEntryColumn } from "./columns";
   import JsonTree from "./JsonTree.svelte";
   import Icon from "./Icon.svelte";
 
@@ -103,8 +104,11 @@
     };
     navigator.clipboard.writeText(JSON.stringify(obj, null, 2)).catch(() => {});
   }
+  // resolvedMsg falls through alias chain (entry.msg → fields.message)
+  // so Python/Node entries render their message text rather than blank.
+  let resolvedMsg = $derived(readEntryColumn(entry, "msg"));
   function copyMsg() {
-    navigator.clipboard.writeText(entry.msg ?? "").catch(() => {});
+    navigator.clipboard.writeText(resolvedMsg).catch(() => {});
   }
   function showSourceFilter() {
     const s = srcOf(entry.source_id);
@@ -154,7 +158,7 @@
         {#if entry.text && entry.ansi}
           {@html ansiToHTML(entry.ansi)}
         {:else}
-          {entry.msg ?? ""}
+          {resolvedMsg}
         {/if}
       </div>
     </section>

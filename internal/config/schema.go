@@ -3,10 +3,27 @@ package config
 // Config is the merged configuration loaded from user + repo + local TOML
 // files. Fields use defaults if absent.
 type Config struct {
-	Server   Server    `toml:"server"`
-	UI       UI        `toml:"ui"`
-	Sources  Sources   `toml:"sources"`
-	Profiles []Profile `toml:"profiles"`
+	Server      Server       `toml:"server"`
+	UI          UI           `toml:"ui"`
+	Sources     Sources      `toml:"sources"`
+	Profiles    []Profile    `toml:"profiles"`
+	SourcePrefs []SourcePref `toml:"source_prefs,omitempty"`
+}
+
+// SourcePref carries auto-detected or user-curated column preferences for a
+// specific (kind, name) source. Detection runs once on the first ~150 JSON
+// entries from a never-locked source; once persisted, the prefs survive
+// across restarts and re-additions of the same file/container.
+//
+// Columns is a list of column ids in display order. Ids are either logical
+// (e.g. "@time", "@message" — resolved via source.AliasMap at render time)
+// or raw dotted paths prefixed with "@" for user-pinned fields.
+type SourcePref struct {
+	Kind       string   `toml:"kind" json:"kind"`   // "file" | "docker" | "stdin"
+	Name       string   `toml:"name" json:"name"`   // file path or container name
+	Columns    []string `toml:"columns" json:"columns"`
+	Locked     bool     `toml:"locked,omitempty" json:"locked,omitempty"`
+	DetectedAt int64    `toml:"detected_at,omitempty" json:"detected_at,omitempty"`
 }
 
 type Server struct {

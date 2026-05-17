@@ -39,7 +39,19 @@
   import ColumnsMenu from "./lib/ColumnsMenu.svelte";
   import ColumnHeader from "./lib/ColumnHeader.svelte";
   import { dismissOnOutside } from "./lib/dismissable";
-  import { loadColumns, saveColumns, fromProfileIDs, toProfileIDs, type Column } from "./lib/columns";
+  import {
+    loadColumns,
+    saveColumns,
+    fromProfileIDs,
+    toProfileIDs,
+    loadColumnsBySource,
+    saveColumnsBySource,
+    columnsFromIds,
+    sourceKey,
+    readEntryColumn,
+    type Column,
+    type ColumnsBySource,
+  } from "./lib/columns";
   import {
     readSessionFromHash,
     clearAddress,
@@ -314,18 +326,26 @@
       // snapshot.sources is wire.SourceEvent-shaped (source_id) — normalize.
       // Drop already-closed records: they shouldn't clutter the legend, and
       // the server keeps them around in s.srcs for diagnostic purposes.
-      sources = (m.snapshot.sources ?? [])
-        .filter((ev: any) => ev.state !== "closed")
-        .map((ev: any) => ({
-          id: ev.source_id,
-          kind: ev.kind,
-          name: ev.name,
-          mode: ev.mode ?? "",
-          state: ev.state,
-          detail: ev.detail,
-        }));
-      // Discover new field names from any backfill that follows.
-      // (column discovery happens in batch handler too.)
+      const visible = (m.snapshot.sources ?? []).filter((ev: any) => ev.state !== "closed");
+      sources = visible.map((ev: any) => ({
+        id: ev.source_id,
+        kind: ev.kind,
+        name: ev.name,
+        mode: ev.mode ?? "",
+        state: ev.state,
+        detail: ev.detail,
+      }));
+      // Server-side recommendations attached to each snapshot source —
+      // refresh the per-source map from disk via the wire. Doesn't auto-
+      // install: snapshot lands on every reconnect and we'd churn columns.
+      for (const ev of visible) {
+        if (ev.columns && ev.columns.length > 0) {
+          const key = sourceKey(ev.kind, ev.name);
+          if (!columnsBySource[key]) {
+            applySourceRecommendation(ev.kind, ev.name, ev.columns);
+          }
+        }
+      }
     } else if (m.type === "source") {
       const ev = m.source;
       if (ev.state === "closed") {
@@ -361,6 +381,12 @@
       if (ev.state === "error" && ev.detail) {
         lastError = `${ev.name || `#${ev.source_id}`}: ${ev.detail}`;
         setTimeout(() => (lastError = ""), 8000);
+      }
+      // Live recommendation: the server's sampler closed and pushed a
+      // freshly-detected column set. Apply (may auto-install on first
+      // run; otherwise stashes under the per-source map).
+      if (ev.columns && ev.columns.length > 0) {
+        applySourceRecommendation(ev.kind, ev.name, ev.columns);
       }
     } else if (m.type === "batch" && m.batch) {
       if (m.batch.gap_n) dropped += m.batch.gap_n;
@@ -773,16 +799,67 @@
 
   // Column configuration — persisted in localStorage; ID list also
   // round-trips through Profile.Columns when a profile is activated.
+  // `columns` is the active visible set; `columnsBySource` holds per-source
+  // overrides keyed by "kind:name" (server-pushed recommendations + user
+  // edits). The active set falls back to baseline (loggi.columns.v1) when
+  // no per-source override applies.
   let columns = $state<Column[]>(loadColumns());
+  let columnsBySource = $state<ColumnsBySource>(loadColumnsBySource());
   let showColumnsMenu = $state(false);
   let hotColumns = $state<string[]>([]);
+  // userCustomizedColumns: did the user ever save columns explicitly?
+  // Determined once at boot. If false, we install the first source-shipped
+  // recommendation as the active columns — covers the "fresh install +
+  // first source added" path without surprising returning users.
+  let userCustomizedColumns = $state(localStorage.getItem("loggi.columns.v1") !== null);
   $effect(() => { saveColumns(columns); });
+  $effect(() => { saveColumnsBySource(columnsBySource); });
   $effect(() => {
     fetch("/api/columns").then((r) => r.json()).then((j) => {
       if (Array.isArray(j?.hot)) hotColumns = j.hot;
       if (Array.isArray(j?.well_known)) setBareFields(j.well_known);
+      if (j?.by_source && typeof j.by_source === "object") {
+        // Merge server-side prefs into the local map so a different
+        // browser/profile picks them up. Local edits always win.
+        const merged = { ...columnsBySource };
+        for (const [k, ids] of Object.entries(j.by_source as Record<string, string[]>)) {
+          if (!merged[k] && Array.isArray(ids) && ids.length > 0) {
+            merged[k] = columnsFromIds(ids);
+          }
+        }
+        columnsBySource = merged;
+      }
     }).catch(() => {});
   });
+
+  // applySourceRecommendation stashes a per-source recommendation under
+  // its (kind, name) key. When the user has never customized columns, the
+  // first arriving recommendation also becomes the active visible set —
+  // so a brand-new install that just added one source shows the right
+  // columns automatically rather than the generic 5-column default.
+  function applySourceRecommendation(kind: string, name: string, ids: string[] | undefined) {
+    if (!ids || ids.length === 0) return;
+    const key = sourceKey(kind, name);
+    const cols = columnsFromIds(ids);
+    // Avoid noisy mutation when the recommendation matches what's stored.
+    const prev = columnsBySource[key];
+    if (prev && sameColumnIds(prev, cols)) return;
+    columnsBySource = { ...columnsBySource, [key]: cols };
+    if (!userCustomizedColumns) {
+      columns = cols;
+      // Subsequent recommendations won't auto-install — the user implicitly
+      // "owns" these columns once they're on screen.
+      userCustomizedColumns = true;
+    }
+  }
+
+  function sameColumnIds(a: Column[], b: Column[]): boolean {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+      if (a[i].id !== b[i].id || a[i].visible !== b[i].visible) return false;
+    }
+    return true;
+  }
 
   // Refresh per-source health stats every 5s. Merges only the rate_ewma /
   // last_ingest_ts / line_count fields so client-side state mutations
@@ -1641,9 +1718,12 @@
               {sourceName}
               {fmtTs}
               onSourceClick={(_ev, name) => addFilterClause(`source:${quoteIfNeeded(name)}`)}
-              msgHTML={(en) => en.text && en.ansi ? { html: ansiToHTML(en.ansi) }
-                              : highlightRe ? { html: highlightMsg(en.msg ?? "") }
-                              : (en.msg ?? "")} />
+              msgHTML={(en) => {
+                if (en.text && en.ansi) return { html: ansiToHTML(en.ansi) };
+                const m = readEntryColumn(en, "msg");
+                if (highlightRe) return { html: highlightMsg(m) };
+                return m;
+              }} />
           </div>
         </div>
       {/each}
@@ -1682,6 +1762,7 @@
     {columns}
     {discoveredFields}
     {hotColumns}
+    sourceRecommendations={columnsBySource}
     onChange={onColumnsChange}
     onClose={() => (showColumnsMenu = false)} />
 {/if}

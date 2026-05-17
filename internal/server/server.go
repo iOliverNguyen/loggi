@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/iOliverNguyen/loggi/internal/coldetect"
 	"github.com/iOliverNguyen/loggi/internal/config"
 	"github.com/iOliverNguyen/loggi/internal/source"
 	"github.com/iOliverNguyen/loggi/internal/store"
@@ -56,6 +57,14 @@ type Options struct {
 	// with `loggi server --debug` (or `./run server-debug`) to inspect
 	// filter/store state at runtime.
 	Debug bool
+
+	// ColumnDetectLimit / ColumnDetectTimeout override the column-
+	// detection sampler's per-source observation budget. Zero values
+	// fall back to coldetect.DefaultLimit / DefaultTimeout. Production
+	// callers leave both zero; tests use tight values to exercise the
+	// sampler-close path quickly.
+	ColumnDetectLimit   int
+	ColumnDetectTimeout time.Duration
 }
 
 // ProfileInfo is the wire representation of a config profile.
@@ -149,6 +158,17 @@ type sourceRec struct {
 	lineCount  atomic.Uint64
 	lastLineNs atomic.Int64
 	rateEWMA   atomic.Uint64 // math.Float64bits(rate)
+
+	// detector samples the first ~150 JSON entries from this source and
+	// emits a column recommendation when the window closes. Nil once
+	// detection has finished or the source's column set was already
+	// locked by a persisted SourcePref. See coldetect.go.
+	detector *columnDetector
+
+	// pinnedColumns holds the column list this source resolved with at
+	// attach time — either the persisted SourcePref columns or nil while
+	// detection is still in flight. Sent to fresh clients via snapshot.
+	pinnedColumns []string
 }
 
 // modeStr returns the current mode or "" if undetected.
@@ -436,6 +456,11 @@ func (s *Server) tickStats() {
 			}
 			lastTick = now
 			s.srcMu.RLock()
+			type pending struct {
+				id   uint64
+				cols []string
+			}
+			var toFinalize []pending
 			for id, rec := range s.srcs {
 				cur := rec.lineCount.Load()
 				delta := cur - prev[id]
@@ -444,8 +469,19 @@ func (s *Server) tickStats() {
 				old := math.Float64frombits(rec.rateEWMA.Load())
 				next := (1-alpha)*old + alpha*rate
 				rec.rateEWMA.Store(math.Float64bits(next))
+				// Close out detectors whose wall-clock window elapsed
+				// without hitting the entry cap — applies to quiet
+				// sources (a sparse docker container, a stalled file).
+				if rec.detector != nil {
+					if cols, finished := rec.detector.closeIfDeadline(); finished {
+						toFinalize = append(toFinalize, pending{id: id, cols: cols})
+					}
+				}
 			}
 			s.srcMu.RUnlock()
+			for _, p := range toFinalize {
+				s.finalizeRecommendation(p.id, p.cols)
+			}
 		}
 	}
 }
@@ -595,6 +631,16 @@ func (s *Server) findOpenSourceWithOwner(kind source.Kind, ident, owner string) 
 func (s *Server) attach(id uint64, src source.Source, owner string) error {
 	ctx, cancel := context.WithCancel(s.ctx)
 	rec := &sourceRec{src: src, cancel: cancel, state: "open", owner: owner}
+	// Restore persisted column prefs if this (kind, name) has been seen
+	// before. Detection only starts when no SourcePref is locked yet,
+	// preserving any manual edits the user made on a previous run.
+	if pref, ok := lookupSourcePref(src.Kind(), src.Name()); ok && pref.Locked {
+		rec.pinnedColumns = pref.Columns
+	} else {
+		rec.detector = &columnDetector{
+			sampler: coldetect.New(s.opts.ColumnDetectLimit, s.opts.ColumnDetectTimeout),
+		}
+	}
 	s.srcMu.Lock()
 	s.srcs[id] = rec
 	s.srcMu.Unlock()
@@ -659,6 +705,7 @@ func (s *Server) Sources() []SourceInfo {
 			RateEWMA:     math.Float64frombits(r.rateEWMA.Load()),
 			LastIngestTs: lastUnix,
 			LineCount:    r.lineCount.Load(),
+			Columns:      r.pinnedColumns,
 		})
 	}
 	return out
@@ -666,14 +713,15 @@ func (s *Server) Sources() []SourceInfo {
 
 // SourceInfo is the snapshot for a source.
 type SourceInfo struct {
-	ID           uint64  `json:"id"`
-	Kind         string  `json:"kind"`
-	Name         string  `json:"name"`
-	Mode         string  `json:"mode"`
-	State        string  `json:"state"`
-	RateEWMA     float64 `json:"rate_ewma"`      // lines/sec, EWMA over 1s ticks
-	LastIngestTs int64   `json:"last_ingest_ts"` // unix seconds, 0 = never
-	LineCount    uint64  `json:"line_count"`
+	ID           uint64   `json:"id"`
+	Kind         string   `json:"kind"`
+	Name         string   `json:"name"`
+	Mode         string   `json:"mode"`
+	State        string   `json:"state"`
+	RateEWMA     float64  `json:"rate_ewma"`      // lines/sec, EWMA over 1s ticks
+	LastIngestTs int64    `json:"last_ingest_ts"` // unix seconds, 0 = never
+	LineCount    uint64   `json:"line_count"`
+	Columns      []string `json:"columns,omitempty"` // persisted per-source column prefs
 }
 
 // ingester is the single goroutine that decodes raw lines into store rows.
@@ -708,12 +756,22 @@ func (s *Server) processLine(line source.RawLine) {
 		})
 	}
 	// Health bookkeeping — cheap atomics on the hot path.
+	var detector *columnDetector
 	s.srcMu.RLock()
 	if rec, ok := s.srcs[line.SourceID]; ok {
 		rec.lineCount.Add(1)
 		rec.lastLineNs.Store(time.Now().UnixNano())
+		detector = rec.detector
 	}
 	s.srcMu.RUnlock()
+	// Column auto-detection: only JSON lines carry useful field shapes.
+	// observe() is safe to call after the detector has closed (returns
+	// early), so we don't need to recheck here.
+	if lineJSON && detector != nil {
+		if _, finished, cols := detector.observe(line.Bytes); finished {
+			s.finalizeRecommendation(line.SourceID, cols)
+		}
+	}
 	if justSet {
 		// Broadcast so clients learn the mode without needing a fresh snapshot.
 		s.broadcastSourceState(line.SourceID, "open", "")

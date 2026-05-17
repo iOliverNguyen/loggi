@@ -108,6 +108,7 @@ func snapshotSources(in []SourceInfo) []wire.SourceEvent {
 	for i, s := range in {
 		out[i] = wire.SourceEvent{
 			SourceID: s.ID, Kind: s.Kind, Name: s.Name, Mode: s.Mode, State: s.State,
+			Columns: s.Columns,
 		}
 	}
 	return out
