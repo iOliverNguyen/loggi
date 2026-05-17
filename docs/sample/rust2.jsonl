@@ -1,0 +1,18 @@
+{"msg":"service starting","level":"INFO","ts":"2026-05-17T10:52:46.931056Z","env":"prod","version":"1.4.2","service":"orders-api","port":8080,"env":"prod","version":"1.4.2"}
+{"msg":"config loaded","level":"DEBG","ts":"2026-05-17T10:52:46.931118Z","env":"prod","version":"1.4.2","service":"orders-api","config_path":"/etc/orders/app.yaml"}
+{"msg":"request received","level":"INFO","ts":"2026-05-17T10:52:46.931128Z","env":"prod","version":"1.4.2","service":"orders-api","trace_id":"a1b2c3d4e5f6","request_id":"req_8f3a","path":"/api/orders","method":"GET"}
+{"msg":"executing query","level":"DEBG","ts":"2026-05-17T10:52:46.931137Z","env":"prod","version":"1.4.2","service":"orders-api","trace_id":"a1b2c3d4e5f6","duration_ms":12.4,"query":"SELECT * FROM orders WHERE user_id=$1"}
+{"msg":"cache miss","level":"DEBG","ts":"2026-05-17T10:52:46.931146Z","env":"prod","version":"1.4.2","service":"orders-api","trace_id":"a1b2c3d4e5f6","key":"orders:user:42"}
+{"msg":"cache populated","level":"INFO","ts":"2026-05-17T10:52:46.931152Z","env":"prod","version":"1.4.2","service":"orders-api","trace_id":"a1b2c3d4e5f6","ttl_s":300,"key":"orders:user:42"}
+{"msg":"request completed","level":"INFO","ts":"2026-05-17T10:52:46.931158Z","env":"prod","version":"1.4.2","service":"orders-api","trace_id":"a1b2c3d4e5f6","duration_ms":23.1,"status":200}
+{"msg":"auth attempt failed","level":"WARN","ts":"2026-05-17T10:52:46.931166Z","env":"prod","version":"1.4.2","service":"orders-api","source_ip":"203.0.113.42","reason":"invalid_password","user_id":99}
+{"msg":"rate limit exceeded","level":"WARN","ts":"2026-05-17T10:52:46.931173Z","env":"prod","version":"1.4.2","service":"orders-api","window_s":60,"limit":100,"client_ip":"10.0.0.7"}
+{"msg":"background job started","level":"INFO","ts":"2026-05-17T10:52:46.93118Z","env":"prod","version":"1.4.2","service":"orders-api","job":"email_digest"}
+{"msg":"job progress","level":"INFO","ts":"2026-05-17T10:52:46.931189Z","env":"prod","version":"1.4.2","service":"orders-api","items_total":1000,"items_processed":250,"job":"email_digest"}
+{"msg":"slow query detected","level":"WARN","ts":"2026-05-17T10:52:46.931199Z","env":"prod","version":"1.4.2","service":"orders-api","duration_ms":2154,"query":"SELECT * FROM events WHERE created_at > $1"}
+{"msg":"downstream call failed","level":"ERRO","ts":"2026-05-17T10:52:46.931206Z","env":"prod","version":"1.4.2","service":"orders-api","retry":1,"upstream":"https://payments.internal","error":"connection reset by peer"}
+{"msg":"upstream timeout","level":"ERRO","ts":"2026-05-17T10:52:46.931213Z","env":"prod","version":"1.4.2","service":"orders-api","trace_id":"b7c8d9e0f1g2","retry":2,"timeout_ms":5000,"service":"payments"}
+{"msg":"payment validation aborted","level":"ERRO","ts":"2026-05-17T10:52:46.93122Z","env":"prod","version":"1.4.2","service":"orders-api","upstream":"payments.internal","error":"UpstreamUnreachable: tcp connect to payments.internal:443 refused"}
+{"msg":"job completed","level":"INFO","ts":"2026-05-17T10:52:46.931228Z","env":"prod","version":"1.4.2","service":"orders-api","items_total":1000,"duration_ms":18400,"job":"email_digest"}
+{"msg":"memory pressure","level":"WARN","ts":"2026-05-17T10:52:46.931234Z","env":"prod","version":"1.4.2","service":"orders-api","threshold_mb":800,"heap_used_mb":820}
+{"msg":"shutting down","level":"INFO","ts":"2026-05-17T10:52:46.931242Z","env":"prod","version":"1.4.2","service":"orders-api","reason":"SIGTERM"}

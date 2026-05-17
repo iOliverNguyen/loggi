@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/RoaringBitmap/roaring/v2"
+	"github.com/iOliverNguyen/loggi/internal/source"
 )
 
 // Options configures a new Store.
@@ -249,6 +250,17 @@ func (s *Store) appendJSONLocked(seq, idx uint64, raw []byte) {
 
 	for k, rawVal := range obj {
 		s.ingestFieldLocked(seq, idx, k, rawVal)
+	}
+
+	// Cross-source level normalization. Run AFTER the per-field pass so
+	// any direct "level" key already lives in fields/tail-KV (preserves
+	// the raw form for filter expressions like `level_name:WARNING`).
+	// ExtractLevel walks every aliased path (string, numeric, nested
+	// loguru object) and returns the canonical lowercase form; we
+	// overwrite the level hot column slot with it. Skip when ExtractLevel
+	// can't classify — leaving whatever the raw `level` key produced.
+	if canon := source.ExtractLevel(obj); canon != "" {
+		s.hot["level"].SetString(idx, seq, canon, s.intern)
 	}
 
 	atomic.AddUint64(&s.rowsSeen, 1)

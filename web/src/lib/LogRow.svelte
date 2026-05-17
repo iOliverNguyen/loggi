@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { Entry } from "./types";
   import type { Column } from "./columns";
-  import { readFieldPath, readEntryColumn, parseTimestamp } from "./columns";
+  import { readEntryColumn, parseTimestamp } from "./columns";
 
   let {
     entry,
@@ -26,15 +26,14 @@
   }>();
 
   // Time column: prefers entry.ts (the promoted float slot). For sources
-  // that ship ISO strings under `timestamp`/`@timestamp` (Python, Node)
-  // entry.ts is 0 — fall back through the alias chain and parse.
+  // that ship ISO strings under any of the aliased keys (timestamp /
+  // @timestamp / time / datetime / record.time.timestamp), entry.ts is 0
+  // — readEntryColumn walks the full alias chain and we parse the result.
   function tsForEntry(e: Entry): number {
     if (e.ts) return e.ts;
-    const fromField =
-      readFieldPath(e.fields, "timestamp") ||
-      readFieldPath(e.fields, "@timestamp");
-    if (!fromField) return 0;
-    const v = parseTimestamp(fromField);
+    const raw = readEntryColumn(e, "ts");
+    if (!raw) return 0;
+    const v = parseTimestamp(raw);
     return Number.isFinite(v) ? v : 0;
   }
 
@@ -43,10 +42,10 @@
     return readEntryColumn(entry, c.id);
   }
 
-  // Message fallback: most non-Go logs ship under "message". Existing
-  // entry.msg is always tried first so Go entries don't pay the lookup.
+  // Message fallback: walks the full alias chain (msg → message → event →
+  // fields.message → record.message). entry.msg short-circuits when set.
   function msgFallback(e: Entry): string {
-    return e.msg || readFieldPath(e.fields, "message");
+    return readEntryColumn(e, "msg");
   }
 
   function callerValue(e: Entry): string {

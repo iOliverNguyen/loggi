@@ -232,8 +232,8 @@ export function toProfileIDs(cols: Column[]): string[] {
   return cols.filter((c) => c.visible).map((c) => c.id);
 }
 
-// readFieldPath walks `entry.fields` (and entry top-level slots for the
-// built-in aliases) to pull a string value out for a given column id.
+// readFieldPath walks `entry.fields` to pull a string value out for a
+// given column id.
 //
 //   - Built-in slots (ts/msg/level/service) come from entry.* with an
 //     alias fallback through entry.fields[<member>] when the slot is
@@ -242,9 +242,21 @@ export function toProfileIDs(cols: Column[]): string[] {
 //   - "@dotted.path" ids walk entry.fields directly.
 //   - Logical ids (the alias-map keys, e.g. "caller") walk through
 //     `aliasMembers` until a non-empty value is found.
+//
+// Literal-key fast path: ECS (`log.logger`, `log.level`) and Datadog
+// (`dd.span_id`) ship flat keys containing dots. Without the fast path
+// we'd interpret them as "walk into `log` then read `.logger`" — and
+// miss the value entirely.
 export function readFieldPath(fields: unknown, path: string): string {
   if (!fields || typeof fields !== "object") return "";
-  let cur: unknown = fields;
+  const obj = fields as Record<string, unknown>;
+  if (path in obj) {
+    const v = obj[path];
+    if (v == null) return "";
+    if (typeof v === "object") return JSON.stringify(v);
+    return String(v);
+  }
+  let cur: unknown = obj;
   for (const seg of path.split(".")) {
     if (cur == null || typeof cur !== "object") return "";
     cur = (cur as Record<string, unknown>)[seg];
@@ -257,32 +269,33 @@ export function readFieldPath(fields: unknown, path: string): string {
 // readEntryColumn returns the displayable string for column `id` against
 // `entry`. Centralizes the alias chain so renderers don't each implement
 // it. Empty string when nothing is set.
+//
+// Strategy:
+//   1. For top-level promoted slots (entry.ts/level/service/msg), prefer
+//      the slot when non-empty. Server promotes the most common key per
+//      logical id into these.
+//   2. Walk the alias chain via `aliasMembers` for any canonical id.
+//      This handles every cross-language synonym including nested
+//      dotted paths (loguru `record.message`, tracing `fields.message`).
+//   3. Fall through to a raw field-path lookup for `@dotted.path` ids
+//      and unknown bare keys.
 export function readEntryColumn(entry: Entry, id: string): string {
-  // Built-in top-level slots.
-  if (id === "ts") {
-    if (entry.ts) return String(entry.ts);
-    const fromField = readFieldPath(entry.fields, "timestamp") || readFieldPath(entry.fields, "@timestamp");
-    return fromField;
-  }
-  if (id === "level") return entry.level ?? "";
-  if (id === "service") return entry.service ?? "";
-  if (id === "msg") {
-    if (entry.msg) return entry.msg;
-    return readFieldPath(entry.fields, "message");
-  }
-  // Logical id with an alias chain (e.g. "caller").
+  if (id === "ts" && entry.ts) return String(entry.ts);
+  if (id === "level" && entry.level) return entry.level;
+  if (id === "service" && entry.service) return entry.service;
+  if (id === "msg" && entry.msg) return entry.msg;
+
   if (isLogicalId(id)) {
     for (const member of aliasMembers(id)) {
+      if (member === id) continue; // covered by the top-level slot check
       const v = readFieldPath(entry.fields, member);
       if (v) return v;
     }
     return "";
   }
-  // "@dotted.path" field column.
   if (id.startsWith("@")) {
     return readFieldPath(entry.fields, id.slice(1));
   }
-  // Unknown — try as a raw top-level key.
   return readFieldPath(entry.fields, id);
 }
 

@@ -14,11 +14,46 @@
 // logical id on the Go side without mirroring here — causes the column
 // renderer to receive an unknown id and show "—".
 export const ALIAS_MAP: Record<string, string[]> = {
-  ts: ["ts", "timestamp", "@timestamp"],
-  msg: ["msg", "message"],
-  caller: ["caller", "logger"],
-  level: ["level"],
-  service: ["service"],
+  ts: [
+    "ts", "timestamp", "@timestamp",
+    "time", "datetime",
+    "fields.timestamp",       // tracing-subscriber (rare)
+    "record.time.timestamp",  // loguru
+  ],
+  msg: [
+    "msg", "message",
+    "event",          // structlog
+    "fields.message", // tracing-subscriber
+    "record.message", // loguru
+  ],
+  caller: [
+    "caller", "callerFunc",
+    "logger", "logger_name", // python stdlib, logback
+    "log.logger",                            // ECS
+    "target", "module_path", "module",       // rust tracing / log4rs / loguru
+    "channel",                               // monolog
+    "progname",                              // ruby logger
+    "record.function", "record.file.name",   // loguru
+  ],
+  service: [
+    "service",
+    "application",          // ruby SemanticLogger
+    "span.service",          // rust tracing-subscriber
+    "mdc.service",           // rust log4rs / logback MDC
+    "record.extra.service",  // loguru
+  ],
+  level: [
+    "level",
+    "level_name",        // monolog string form
+    "log.level",         // ECS
+    "monolog_level",     // php2 numeric
+    "level_value",       // logback numeric
+    "level_index",       // ruby SemanticLogger numeric
+    "severity",          // GCP / syslog
+    "level.name",        // defensive shallow nested
+    "record.level.name", // loguru
+    "record.level",      // loguru bare string
+  ],
 };
 
 // Priorities is the fixed display order for canonical columns when

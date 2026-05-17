@@ -131,7 +131,11 @@ func (s *Sampler) foldField(key string, raw json.RawMessage, depth int) {
 	}
 
 	val, isObj := unwrap(raw)
-	if isObj && depth < maxDepth+1 {
+	// Recurse one level deeper than the column-promotion depth so we can
+	// still discover aliased paths like loguru's `record.time.timestamp`
+	// (depth 3). Non-aliased depth-3 leaves get filtered out at scoring
+	// time; alias-resolved priorities skip the depth filter.
+	if isObj && depth <= maxDepth+1 {
 		var child map[string]json.RawMessage
 		if err := json.Unmarshal(raw, &child); err == nil {
 			for ck, cv := range child {
@@ -245,15 +249,19 @@ func (s *Sampler) Recommend() []string {
 	var nonPriority []cand
 
 	for raw, fs := range s.fields {
-		if fs.depth > maxDepth {
-			continue
-		}
 		presence := float64(fs.count) / N
 		distinct := len(fs.distinct)
 		vl95 := p95(fs.valLens)
 
 		logical := source.Resolve(raw)
 		isPriority := logical != "" && source.IsPriority(logical)
+		// Depth filter applies only to non-priority fields. Priority
+		// canonicals are allowed through at any depth so explicit aliases
+		// like loguru's `record.time.timestamp` (depth 3) and tracing's
+		// `span.service` surface as columns despite the nesting.
+		if !isPriority && fs.depth > maxDepth {
+			continue
+		}
 		if logical == "" {
 			logical = "@" + raw
 		}

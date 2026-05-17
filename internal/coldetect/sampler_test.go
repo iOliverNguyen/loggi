@@ -110,7 +110,11 @@ func TestRecommend_AliasCollapse(t *testing.T) {
 
 func feedFile(t *testing.T, s *Sampler, name string) {
 	t.Helper()
-	path := filepath.Join("..", "..", "_docs", "sample", name)
+	feedPath(t, s, filepath.Join("..", "..", "_docs", "sample", name))
+}
+
+func feedPath(t *testing.T, s *Sampler, path string) {
+	t.Helper()
 	f, err := os.Open(path)
 	if err != nil {
 		t.Fatalf("open %s: %v", path, err)
@@ -127,6 +131,63 @@ func feedFile(t *testing.T, s *Sampler, name string) {
 	}
 	if err := sc.Err(); err != nil {
 		t.Fatalf("scan %s: %v", path, err)
+	}
+}
+
+// TestRecommend_Cases drives the sampler over the 21 real-world fixtures
+// under __/cases/{lang}{n}/output.jsonl. Per-fixture `want` lists only
+// the canonicals the fixture's actual shape supports — a fixture with no
+// caller-like field (e.g. nodejs1, ruby3 pino-style) genuinely can't
+// surface one, and the test shouldn't pretend otherwise. ts/level/msg
+// are universal across all fixtures.
+func TestRecommend_Cases(t *testing.T) {
+	universal := []string{"ts", "level", "msg"}
+	cases := []struct {
+		name  string
+		extra []string // canonicals expected beyond ts/level/msg
+	}{
+		{"go1", []string{"service"}},
+		{"go2", []string{"service", "caller"}},
+		{"go3", []string{"service"}},
+		{"java1", []string{"service", "caller"}},
+		{"java2", []string{"service", "caller"}},
+		{"java3", []string{"service", "caller"}},
+		{"nodejs1", []string{"service"}},
+		{"nodejs2", []string{"service"}},
+		{"nodejs3", nil}, // pino: `name` doubles as service, intentionally not aliased
+		{"php1", []string{"caller"}}, // channel is the caller-like signal; no service
+		{"php2", []string{"caller"}},
+		{"php3", []string{"service"}},
+		{"py1", []string{"service", "caller"}},
+		{"py2", []string{"service"}},
+		{"py3", []string{"service", "caller"}}, // loguru: nested record.* via deep alias paths
+		{"ruby1", []string{"service", "caller"}},
+		{"ruby2", []string{"service"}}, // `application` aliases service; name=class, not aliased
+		{"ruby3", nil}, // pino-ruby: same `name` overload as nodejs3
+		{"rust1", []string{"service", "caller"}}, // span.service + target
+		{"rust2", []string{"service"}},
+		{"rust3", []string{"service", "caller"}}, // mdc.service + module_path
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := New(0, 0)
+			feedPath(t, s, filepath.Join("..", "..", "__", "cases", c.name, "output.jsonl"))
+			got := s.Recommend()
+			gotSet := make(map[string]struct{}, len(got))
+			for _, id := range got {
+				gotSet[id] = struct{}{}
+			}
+			want := append(append([]string{}, universal...), c.extra...)
+			var missing []string
+			for _, id := range want {
+				if _, ok := gotSet[id]; !ok {
+					missing = append(missing, id)
+				}
+			}
+			if len(missing) > 0 {
+				t.Errorf("missing canonicals %v (got %v, n=%d)", missing, sorted(got), s.N())
+			}
+		})
 	}
 }
 
