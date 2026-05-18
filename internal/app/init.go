@@ -48,11 +48,11 @@ func NewInitCmd() *cobra.Command {
 			if repo == "" {
 				return fmt.Errorf("no repo root (.git or go.mod) found above %s", cwd)
 			}
-			committed, _ := config.RepoConfigPaths(repo)
+			committed, _ := config.RepoConfigPaths(repo) // local override path unused here
 			if _, err := os.Stat(committed); err == nil && !force {
 				return fmt.Errorf("%s already exists (use --force to overwrite)", committed)
 			}
-			if err := os.MkdirAll(filepath.Dir(committed), 0o755); err != nil {
+			if err := os.MkdirAll(filepath.Dir(committed), 0o700); err != nil {
 				return err
 			}
 			if err := os.WriteFile(committed, []byte(initTemplate), 0o644); err != nil {

@@ -76,9 +76,9 @@ func planNode(n Node, s *store.Store) Plan {
 				}
 			}
 		}
-		return Plan{Residual: compile(x, s)}
+		return Plan{Residual: wrap(s, compile(x, s))}
 	default:
-		return Plan{Residual: compile(x, s)}
+		return Plan{Residual: wrap(s, compile(x, s))}
 	}
 }
 

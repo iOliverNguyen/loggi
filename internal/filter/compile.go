@@ -2,6 +2,7 @@ package filter
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 
 	"github.com/iOliverNguyen/loggi/internal/store"
@@ -12,87 +13,142 @@ var LevelOrdinals = map[string]int{
 	"trace": 0, "debug": 1, "info": 2, "warn": 3, "warning": 3, "error": 4, "fatal": 5,
 }
 
+// evalCtx is a per-seq scratch pad shared across all compiled nodes in one
+// eval pass. It memoises the Materialize call and the full Fields decode
+// so a multi-clause filter that touches the same nested object twice pays
+// for the parse once.
+type evalCtx struct {
+	s   *store.Store
+	seq uint64
+
+	row        *store.MaterializedRow
+	rowFetched bool
+
+	top        map[string]any
+	topDecoded bool
+}
+
+func (c *evalCtx) Row() *store.MaterializedRow {
+	if !c.rowFetched {
+		c.row = c.s.Materialize(c.seq)
+		c.rowFetched = true
+	}
+	return c.row
+}
+
+// Top returns the fully-decoded Fields tree. Nested objects are
+// map[string]any, so path walks use cheap type assertions instead of
+// re-Unmarshaling each level.
+func (c *evalCtx) Top() map[string]any {
+	if c.topDecoded {
+		return c.top
+	}
+	c.topDecoded = true
+	row := c.Row()
+	if row == nil || len(row.Fields) == 0 {
+		return nil
+	}
+	_ = json.Unmarshal(row.Fields, &c.top)
+	return c.top
+}
+
+// evalNode is the internal closure shape: per-seq lookups go through a
+// shared evalCtx. The public store.EvalFn wraps this at the Compile boundary.
+type evalNode func(*evalCtx) bool
+
 // Compile turns an AST into an EvalFn closed over the given Store.
 // nil node means "match all".
 func Compile(n Node, s *store.Store) store.EvalFn {
 	if n == nil {
 		return nil
 	}
-	return compile(n, s)
+	return wrap(s, compile(n, s))
 }
 
-func compile(n Node, s *store.Store) store.EvalFn {
+// wrap converts an evalNode into a store.EvalFn, creating one evalCtx per
+// seq so a single eval pass through the node tree shares decoded state.
+func wrap(s *store.Store, n evalNode) store.EvalFn {
+	if n == nil {
+		return nil
+	}
+	return func(seq uint64) bool {
+		ctx := evalCtx{s: s, seq: seq}
+		return n(&ctx)
+	}
+}
+
+func compile(n Node, s *store.Store) evalNode {
 	switch x := n.(type) {
 	case *AndNode:
 		l := compile(x.L, s)
 		r := compile(x.R, s)
-		return func(seq uint64) bool { return l(seq) && r(seq) }
+		return func(c *evalCtx) bool { return l(c) && r(c) }
 	case *OrNode:
 		l := compile(x.L, s)
 		r := compile(x.R, s)
-		return func(seq uint64) bool { return l(seq) || r(seq) }
+		return func(c *evalCtx) bool { return l(c) || r(c) }
 	case *NotNode:
 		inner := compile(x.X, s)
-		return func(seq uint64) bool { return !inner(seq) }
+		return func(c *evalCtx) bool { return !inner(c) }
 	case *EqNode:
 		return compileEq(x, s)
 	case *SubstrNode:
-		return compileSubstr(x, s)
+		return compileSubstr(x)
 	case *ExistsNode:
-		return compileExists(x, s)
+		return compileExists(x)
 	case *RangeNode:
-		return compileRange(x, s)
+		return compileRange(x)
 	case *CmpNumNode:
-		return compileCmpNum(x, s)
+		return compileCmpNum(x)
 	case *CmpStrNode:
-		return compileCmpStr(x, s)
+		return compileCmpStr(x)
 	case *RegexNode:
-		return compileRegex(x, s)
+		return compileRegex(x)
 	}
-	return func(uint64) bool { return false }
+	return func(*evalCtx) bool { return false }
 }
 
-func compileRegex(n *RegexNode, s *store.Store) store.EvalFn {
+func compileRegex(n *RegexNode) evalNode {
 	re := n.Re
 	if re == nil {
-		return func(uint64) bool { return false }
+		return func(*evalCtx) bool { return false }
 	}
-	return func(seq uint64) bool {
-		return re.MatchString(materializeField(s, seq, n.Path))
+	return func(c *evalCtx) bool {
+		return re.MatchString(c.materializeField(n.Path))
 	}
 }
 
-func compileEq(n *EqNode, s *store.Store) store.EvalFn {
+func compileEq(n *EqNode, s *store.Store) evalNode {
 	needle := n.V
 	if len(n.Path) == 1 {
 		name := n.Path[0]
 		if s.HotColumn(name) != nil {
-			return func(seq uint64) bool {
-				v := s.HotString(seq, name)
+			return func(c *evalCtx) bool {
+				v := c.s.HotString(c.seq, name)
 				return v == needle || stringEqIgnoringQuotes(v, needle)
 			}
 		}
 	}
-	return func(seq uint64) bool {
-		v := materializeField(s, seq, n.Path)
+	return func(c *evalCtx) bool {
+		v := c.materializeField(n.Path)
 		return v == needle
 	}
 }
 
-func compileSubstr(n *SubstrNode, s *store.Store) store.EvalFn {
+func compileSubstr(n *SubstrNode) evalNode {
 	if n.Glob != nil {
 		parts := n.Glob
-		return func(seq uint64) bool {
-			return matchGlob(materializeField(s, seq, n.Path), parts)
+		return func(c *evalCtx) bool {
+			return matchGlob(c.materializeField(n.Path), parts)
 		}
 	}
 	needle := n.Needle
 	if needle == "" {
-		return func(uint64) bool { return true }
+		return func(*evalCtx) bool { return true }
 	}
 	exact := n.Exact
-	return func(seq uint64) bool {
-		v := materializeField(s, seq, n.Path)
+	return func(c *evalCtx) bool {
+		v := c.materializeField(n.Path)
 		if exact {
 			return v == needle
 		}
@@ -100,9 +156,9 @@ func compileSubstr(n *SubstrNode, s *store.Store) store.EvalFn {
 	}
 }
 
-func compileExists(n *ExistsNode, s *store.Store) store.EvalFn {
-	return func(seq uint64) bool {
-		return materializeField(s, seq, n.Path) != ""
+func compileExists(n *ExistsNode) evalNode {
+	return func(c *evalCtx) bool {
+		return c.materializeField(n.Path) != ""
 	}
 }
 
@@ -159,9 +215,9 @@ func matchGlob(s string, parts []GlobPart) bool {
 	return true
 }
 
-func compileRange(n *RangeNode, s *store.Store) store.EvalFn {
-	return func(seq uint64) bool {
-		f, ok := materializeNumber(s, seq, n.Path)
+func compileRange(n *RangeNode) evalNode {
+	return func(c *evalCtx) bool {
+		f, ok := c.materializeNumber(n.Path)
 		if !ok {
 			return false
 		}
@@ -169,9 +225,9 @@ func compileRange(n *RangeNode, s *store.Store) store.EvalFn {
 	}
 }
 
-func compileCmpNum(n *CmpNumNode, s *store.Store) store.EvalFn {
-	return func(seq uint64) bool {
-		f, ok := materializeNumber(s, seq, n.Path)
+func compileCmpNum(n *CmpNumNode) evalNode {
+	return func(c *evalCtx) bool {
+		f, ok := c.materializeNumber(n.Path)
 		if !ok {
 			return false
 		}
@@ -189,16 +245,16 @@ func compileCmpNum(n *CmpNumNode, s *store.Store) store.EvalFn {
 	}
 }
 
-func compileCmpStr(n *CmpStrNode, s *store.Store) store.EvalFn {
+func compileCmpStr(n *CmpStrNode) evalNode {
 	op := n.Op
 	// Special case: level ordinals.
 	if len(n.Path) == 1 && n.Path[0] == "level" {
 		want, ok := LevelOrdinals[strings.ToLower(n.V)]
 		if !ok {
-			return func(uint64) bool { return false }
+			return func(*evalCtx) bool { return false }
 		}
-		return func(seq uint64) bool {
-			v := s.HotString(seq, "level")
+		return func(c *evalCtx) bool {
+			v := c.s.HotString(c.seq, "level")
 			got, ok := LevelOrdinals[strings.ToLower(v)]
 			if !ok {
 				return false
@@ -207,8 +263,8 @@ func compileCmpStr(n *CmpStrNode, s *store.Store) store.EvalFn {
 		}
 	}
 	want := n.V
-	return func(seq uint64) bool {
-		v := materializeField(s, seq, n.Path)
+	return func(c *evalCtx) bool {
+		v := c.materializeField(n.Path)
 		return cmpStr(v, want, op)
 	}
 }
@@ -244,22 +300,23 @@ func stringEqIgnoringQuotes(a, b string) bool {
 	return strings.Trim(a, `"`) == strings.Trim(b, `"`)
 }
 
-// materializeField returns the string value of `path` for row at seq,
+// materializeField returns the string value of `path` for the ctx's seq,
 // crossing into tail-KV / nested JSON as needed. Returns "" if missing.
 //
 // Fast path: a single-segment path that names a hot column reads directly
 // from the column without materializing the whole row.
-func materializeField(s *store.Store, seq uint64, path []string) string {
+func (c *evalCtx) materializeField(path []string) string {
+	s := c.s
 	// `source` is a synthetic field resolved via the server-installed lookup.
 	if len(path) == 1 && path[0] == "source" {
-		return s.SourceName(s.SourceIDOfSeq(seq))
+		return s.SourceName(s.SourceIDOfSeq(c.seq))
 	}
 	if len(path) == 1 {
 		if s.HotColumn(path[0]) != nil {
-			return s.HotString(seq, path[0])
+			return s.HotString(c.seq, path[0])
 		}
 	}
-	row := s.Materialize(seq)
+	row := c.Row()
 	if row == nil {
 		return ""
 	}
@@ -275,75 +332,81 @@ func materializeField(s *store.Store, seq uint64, path []string) string {
 			return s.SourceName(row.SourceID)
 		}
 	}
-	// Walk into the Fields JSON object lazily.
-	if len(row.Fields) == 0 {
+	top := c.Top()
+	if top == nil {
 		return ""
 	}
-	// Top level lookup
-	var top map[string]json.RawMessage
-	if err := json.Unmarshal(row.Fields, &top); err != nil {
-		return ""
-	}
-	cur, ok := top[path[0]]
-	if !ok {
-		return ""
-	}
-	for i := 1; i < len(path); i++ {
-		var inner map[string]json.RawMessage
-		if err := json.Unmarshal(cur, &inner); err != nil {
+	var cur any = top
+	for _, seg := range path {
+		m, ok := cur.(map[string]any)
+		if !ok {
 			return ""
 		}
-		cur, ok = inner[path[i]]
+		cur, ok = m[seg]
 		if !ok {
 			return ""
 		}
 	}
-	// String JSON values: strip quotes.
-	if len(cur) > 0 && cur[0] == '"' {
-		var s string
-		if err := json.Unmarshal(cur, &s); err == nil {
-			return s
-		}
-	}
-	return strings.TrimSpace(string(cur))
+	return formatScalar(cur)
 }
 
-func materializeNumber(s *store.Store, seq uint64, path []string) (float64, bool) {
+// formatScalar renders a decoded JSON scalar back to a comparable string.
+// Strings come out unquoted, numbers in shortest round-trip form. Objects
+// and arrays return "" — they aren't comparable to a string filter.
+func formatScalar(v any) string {
+	switch x := v.(type) {
+	case string:
+		return x
+	case float64:
+		return strconv.FormatFloat(x, 'f', -1, 64)
+	case bool:
+		if x {
+			return "true"
+		}
+		return "false"
+	case nil:
+		return ""
+	}
+	return ""
+}
+
+func (c *evalCtx) materializeNumber(path []string) (float64, bool) {
+	s := c.s
 	if len(path) == 1 {
-		if c := s.HotColumn(path[0]); c != nil {
-			if v, ok := s.HotF64(seq, path[0]); ok {
+		if hc := s.HotColumn(path[0]); hc != nil {
+			if v, ok := s.HotF64(c.seq, path[0]); ok {
 				return v, true
 			}
 		}
 	}
-	row := s.Materialize(seq)
-	if row == nil {
+	row := c.Row()
+	if row == nil || len(row.Fields) == 0 {
 		return 0, false
 	}
-	if len(row.Fields) == 0 {
+	top := c.Top()
+	if top == nil {
 		return 0, false
 	}
-	var top map[string]json.RawMessage
-	if err := json.Unmarshal(row.Fields, &top); err != nil {
-		return 0, false
-	}
-	cur, ok := top[path[0]]
-	if !ok {
-		return 0, false
-	}
-	for i := 1; i < len(path); i++ {
-		var inner map[string]json.RawMessage
-		if err := json.Unmarshal(cur, &inner); err != nil {
+	var cur any = top
+	for _, seg := range path {
+		m, ok := cur.(map[string]any)
+		if !ok {
 			return 0, false
 		}
-		cur, ok = inner[path[i]]
+		cur, ok = m[seg]
 		if !ok {
 			return 0, false
 		}
 	}
-	var f float64
-	if err := json.Unmarshal(cur, &f); err != nil {
-		return 0, false
+	switch x := cur.(type) {
+	case float64:
+		return x, true
+	case string:
+		f, err := strconv.ParseFloat(x, 64)
+		if err != nil {
+			return 0, false
+		}
+		return f, true
 	}
-	return f, true
+	return 0, false
 }
