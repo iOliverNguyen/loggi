@@ -90,20 +90,27 @@ func runServer(_ bool, debug bool) error {
 	}
 
 	pidPath := config.PidPath()
-	_ = os.WriteFile(pidPath, []byte(strconv.Itoa(os.Getpid())), 0o600)
+	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
+		srv.Shutdown()
+		return fmt.Errorf("write pidfile %s: %w", pidPath, err)
+	}
 	defer os.Remove(pidPath)
 
-	_ = client.WriteRuntime(&client.RuntimeInfo{
+	if err := client.WriteRuntime(&client.RuntimeInfo{
 		PID:     os.Getpid(),
 		Socket:  config.SocketPath(),
 		HTTP:    srv.HTTPURL(),
 		Started: time.Now(),
-	})
+	}); err != nil {
+		srv.Shutdown()
+		return fmt.Errorf("write runtime info: %w", err)
+	}
 
 	fmt.Fprintf(os.Stderr, "loggi server: socket=%s http=%s\n", srv.SocketPath(), srv.HTTPURL())
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sig)
 	select {
 	case <-sig:
 	case <-srv.Done():

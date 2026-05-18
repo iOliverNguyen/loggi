@@ -201,12 +201,12 @@ function parseRegexLiteral(value: string): { pattern: string; flags: string } | 
   let end = value.length;
   while (end > 1 && (value[end - 1] === "i" || value[end - 1] === "g")) end--;
   if (end <= 1 || value[end - 1] !== "/") return null;
-  const flags = value.slice(end);
+  // Drop `g`: the Go server's regex parser rejects it. Without this strip,
+  // a `/foo/g` typed in the UI round-trips into a saved chip and explodes
+  // on re-apply.
+  const flags = value.slice(end).replace(/g/g, "");
   const body = value.slice(1, end - 1);
   if (body === "") return null;
-  // TODO: strip or warn on `g` here too — server rejects it. The wire
-  // form round-trips, so chip-built regex with `g` would re-emit it and
-  // fail server-side parse on the next apply.
   return { pattern: body.replace(/\\\//g, "/"), flags };
 }
 

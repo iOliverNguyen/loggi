@@ -192,7 +192,11 @@
     const onUp = () => { sidebarResizing = false; };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp, { once: true });
-    return () => { window.removeEventListener("pointermove", onMove); };
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      // {once:true} self-detaches on fire; explicit removal covers mid-drag unmount.
+      window.removeEventListener("pointerup", onUp);
+    };
   });
 
   // Highlight regex/hit count derive after `entries` and `highlight` are
@@ -451,12 +455,21 @@
   // Capped at 50 values per field; eviction by lowest count.
   let fieldValues = new SvelteMap<string, SvelteMap<string, number>>();
   const VALUES_PER_FIELD = 50;
+  // Outer cap: long-running sessions on heterogeneous logs would otherwise
+  // accumulate every distinct top-level key ever seen. Insertion-order
+  // eviction keeps the cache bounded.
+  const MAX_FIELDS = 512;
 
   function bumpFieldValue(field: string, value: string) {
     if (!value) return;
     if (value.length > 200) return; // skip absurd payloads
     let m = fieldValues.get(field);
     if (!m) {
+      if (fieldValues.size >= MAX_FIELDS) {
+        // SvelteMap preserves insertion order; drop oldest.
+        const firstKey = fieldValues.keys().next().value;
+        if (firstKey !== undefined) fieldValues.delete(firstKey);
+      }
       m = new SvelteMap();
       fieldValues.set(field, m);
     }

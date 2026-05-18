@@ -227,13 +227,31 @@
 
   // Wire the input's keydown via a side-effect; we don't own the input
   // element, just attach a capturing listener.
+  let blurTimer: ReturnType<typeof setTimeout> | null = null;
+  function onInputFocus() {
+    open = suggestions.length > 0;
+  }
+  function onInputBlur() {
+    if (blurTimer !== null) clearTimeout(blurTimer);
+    blurTimer = setTimeout(() => {
+      open = false;
+      blurTimer = null;
+    }, 100);
+  }
   $effect(() => {
     if (!inputEl) return;
-    inputEl.addEventListener("keydown", onInputKey);
-    inputEl.addEventListener("focus", () => (open = suggestions.length > 0));
-    inputEl.addEventListener("blur", () => setTimeout(() => (open = false), 100));
+    const el = inputEl;
+    el.addEventListener("keydown", onInputKey);
+    el.addEventListener("focus", onInputFocus);
+    el.addEventListener("blur", onInputBlur);
     return () => {
-      inputEl?.removeEventListener("keydown", onInputKey);
+      el.removeEventListener("keydown", onInputKey);
+      el.removeEventListener("focus", onInputFocus);
+      el.removeEventListener("blur", onInputBlur);
+      if (blurTimer !== null) {
+        clearTimeout(blurTimer);
+        blurTimer = null;
+      }
     };
   });
 </script>

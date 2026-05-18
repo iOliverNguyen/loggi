@@ -224,7 +224,11 @@ func runStdin(name string, openUI bool) error {
 	if openUI && info != nil {
 		_ = openBrowser(info.HTTP)
 	}
-	fmt.Fprintf(os.Stderr, "loggi stdin: forwarding to source %d (web: %s)\n", srcID, info.HTTP)
+	if info != nil {
+		fmt.Fprintf(os.Stderr, "loggi stdin: forwarding to source %d (web: %s)\n", srcID, info.HTTP)
+	} else {
+		fmt.Fprintf(os.Stderr, "loggi stdin: forwarding to source %d\n", srcID)
+	}
 
 	// Read stdin in chunks; forward as StreamData frames. End with EOF=true.
 	br := bufio.NewReaderSize(os.Stdin, 64<<10)
@@ -238,6 +242,9 @@ func runStdin(name string, openUI bool) error {
 			if err := conn.Read(&sm); err != nil {
 				cancel()
 				return
+			}
+			if sm.Type == wire.SMsgErr && sm.Err != nil {
+				fmt.Fprintf(os.Stderr, "loggi stdin: server error: %s\n", sm.Err.Detail)
 			}
 		}
 	}()

@@ -3,6 +3,7 @@ package client
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/iOliverNguyen/loggi/internal/config"
@@ -34,14 +35,36 @@ func ReadRuntime() (*RuntimeInfo, error) {
 }
 
 // WriteRuntime writes runtime.json (called by the server on Start).
+// Writes via tmp + rename so a crash mid-write cannot leave a partial file
+// for ReadRuntime to choke on.
 func WriteRuntime(info *RuntimeInfo) error {
 	p, err := config.RuntimeFile()
 	if err != nil {
+		return err
+	}
+	dir := filepath.Dir(p)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
 	data, err := json.Marshal(info)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(p, data, 0o600)
+	tmp, err := os.CreateTemp(dir, ".runtime-*.tmp")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), p)
 }

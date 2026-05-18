@@ -2,7 +2,6 @@ package app
 
 import (
 	"fmt"
-	"os"
 	"sort"
 
 	"github.com/iOliverNguyen/loggi/internal/config"
@@ -59,9 +58,7 @@ func NewProfileCmd() *cobra.Command {
 					return nil
 				}
 			}
-			fmt.Fprintln(os.Stderr, "no such profile:", args[0])
-			os.Exit(1)
-			return nil
+			return fmt.Errorf("no such profile: %s", args[0])
 		},
 	})
 	cmd.AddCommand(&cobra.Command{
