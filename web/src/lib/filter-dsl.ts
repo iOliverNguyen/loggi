@@ -91,7 +91,11 @@ function renderValue(op: ClauseOp, v: string): string {
     case "lte":
       return `<=${v}`;
     case "range": {
-      // value is "lo..hi"
+      // Two value shapes: numeric "lo..hi" (server-bound) and the
+      // human-readable ts form "HH:mm:ss.SSS – HH:mm:ss.SSS" (with an
+      // optional "Mmm/DD, " prefix on each side) — the latter is preserved
+      // verbatim so the chip view round-trips byte-for-byte.
+      if (v.includes(" – ")) return `[${v}]`;
       const [lo, hi] = v.split("..");
       return `[${lo}..${hi}]`;
     }
@@ -253,12 +257,17 @@ function parseTerm(raw: string): Clause | null {
     }
   }
 
-  // Range: [lo..hi]
+  // Range: [lo..hi] or human-form ts [HH:mm:ss.SSS – HH:mm:ss.SSS]
+  // (optionally prefixed with "Mmm/DD, " when the endpoints fall on
+  // different local dates).
   if (value.startsWith("[") && value.endsWith("]")) {
     const inner = value.slice(1, -1);
+    if (negate) return null; // not representable as a single negated chip
+    if (inner.includes(" – ")) {
+      return { field, op: "range", value: inner };
+    }
     const dotdot = inner.indexOf("..");
     if (dotdot < 0) return null;
-    if (negate) return null; // not representable as a single negated chip
     return {
       field,
       op: "range",
@@ -376,8 +385,14 @@ export function setSourceSoloed(expr: string, src: string, soloed: boolean): str
 
 // withTimeRange returns `expr` with any existing `ts:[..]` / `ts:>=` /
 // `ts:>` / `ts:<=` / `ts:<` / `ts:N..M` / `-ts:...` clauses removed. If
-// `lo` and `hi` are both finite, a fresh `ts:[lo..hi]` clause is
-// appended. lo/hi are unix seconds.
+// `lo` and `hi` are both finite, a fresh `ts:[…]` clause is appended.
+// lo/hi are unix seconds.
+//
+// The emitted clause uses the **human-readable** form so the filter input
+// stays scannable. Same local date: `ts:[HH:mm:ss.SSS – HH:mm:ss.SSS]`.
+// Crosses local midnight: `ts:[Mmm/DD, HH:mm:ss.SSS – Mmm/DD, HH:mm:ss.SSS]`.
+// `compileTsForWire` translates back to `ts:[unix..unix]` just before
+// the expression is sent over the wire.
 //
 // This lets the timeline brush coexist with a typed filter — the brush
 // owns the ts term, everything else is preserved verbatim.
@@ -392,7 +407,120 @@ export function withTimeRange(expr: string, lo: number | null, hi: number | null
     kept.push(t);
   }
   if (lo != null && hi != null && Number.isFinite(lo) && Number.isFinite(hi) && lo < hi) {
-    kept.push(`ts:[${Math.floor(lo)}..${Math.ceil(hi)}]`);
+    kept.push(`ts:[${formatTsRange(Math.floor(lo), Math.ceil(hi))}]`);
   }
   return kept.join(" ");
+}
+
+const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+function pad2(n: number): string {
+  return n < 10 ? `0${n}` : String(n);
+}
+
+function pad3(n: number): string {
+  return n < 10 ? `00${n}` : n < 100 ? `0${n}` : String(n);
+}
+
+function fmtHMS(d: Date): string {
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}.${pad3(d.getMilliseconds())}`;
+}
+
+function fmtDatePrefix(d: Date): string {
+  return `${MONTH_NAMES[d.getMonth()]}/${pad2(d.getDate())}, `;
+}
+
+// formatTsRange renders the human-readable inner of a `ts:[…]` clause.
+// Inputs are unix seconds. The short (no-date-prefix) form is only safe
+// when *both* endpoints fall on today's local date — `parseTsEndpoint`'s
+// no-prefix path resolves against today, so a yesterday-only brush
+// emitted without a prefix would round-trip 24 h ahead and silently
+// match nothing on the server.
+function formatTsRange(loSec: number, hiSec: number): string {
+  const dLo = new Date(loSec * 1000);
+  const dHi = new Date(hiSec * 1000);
+  const today = new Date();
+  const isToday = (d: Date) =>
+    d.getFullYear() === today.getFullYear() &&
+    d.getMonth() === today.getMonth() &&
+    d.getDate() === today.getDate();
+  if (isToday(dLo) && isToday(dHi)) {
+    return `${fmtHMS(dLo)} – ${fmtHMS(dHi)}`;
+  }
+  return `${fmtDatePrefix(dLo)}${fmtHMS(dLo)} – ${fmtDatePrefix(dHi)}${fmtHMS(dHi)}`;
+}
+
+// Parse one endpoint of a human ts range. Returns unix seconds, or null
+// if `s` doesn't match either shape. Same-date endpoints (no Mmm/DD
+// prefix) resolve against `defaultY` / `defaultM` / `defaultD` (local
+// date). Cross-date endpoints with an explicit Mmm/DD prefix pick the
+// year closest to `now` so year-end wraps round-trip without a stored
+// year in the visible string.
+const ENDPOINT_RE = /^(?:([A-Za-z]{3})\/(\d{2}),\s*)?(\d{2}):(\d{2}):(\d{2})\.(\d{3})$/;
+
+function parseTsEndpoint(
+  s: string,
+  defaults: { y: number; m: number; d: number },
+  nowMs: number,
+): number | null {
+  const m = ENDPOINT_RE.exec(s.trim());
+  if (!m) return null;
+  const [, monStr, dayStr, hh, mm, ss, ms] = m;
+  const H = Number(hh), M = Number(mm), S = Number(ss), MS = Number(ms);
+  if (!monStr) {
+    // No date prefix: anchor against today, but if today's HH:MM:SS lands
+    // far in the future (> 1 min ahead of now) the filter was almost
+    // certainly written before midnight and reloaded the next day. Fall
+    // back to yesterday so the round-trip stays correct across the wrap.
+    const FUTURE_SLACK_MS = 60_000;
+    const t = new Date(defaults.y, defaults.m, defaults.d, H, M, S, MS).getTime();
+    if (t > nowMs + FUTURE_SLACK_MS) {
+      const tPrev = new Date(defaults.y, defaults.m, defaults.d - 1, H, M, S, MS).getTime();
+      return Math.floor(tPrev / 1000);
+    }
+    return Math.floor(t / 1000);
+  }
+  const mi = MONTH_NAMES.indexOf(monStr);
+  if (mi < 0) return null;
+  const day = Number(dayStr);
+  // Pick the year (current or current ± 1) whose resulting timestamp
+  // is closest to `nowMs` — handles dec/jan wrap symmetrically.
+  const curY = new Date(nowMs).getFullYear();
+  let best = NaN;
+  let bestDelta = Infinity;
+  for (const y of [curY - 1, curY, curY + 1]) {
+    const t = new Date(y, mi, day, H, M, S, MS).getTime();
+    const delta = Math.abs(t - nowMs);
+    if (delta < bestDelta) {
+      bestDelta = delta;
+      best = t;
+    }
+  }
+  return Number.isFinite(best) ? Math.floor(best / 1000) : null;
+}
+
+// compileTsForWire rewrites any `ts:[<human>]` clauses in `expr` to
+// `ts:[<unix>..<unix>]` so the server's numeric range parser accepts
+// them. Numeric `ts:[lo..hi]` clauses pass through unchanged.
+//
+// Uses a regex (not a tokenizer) so wrappers like `(…)` from
+// `computeEffectiveFilter`'s pinned-chip ANDing don't fuse the ts term
+// into a bigger token that no longer starts with `ts:[`.
+const TS_HUMAN_RE = /(-|!)?ts:\[((?:[A-Za-z]{3}\/\d{2},\s*)?\d{2}:\d{2}:\d{2}\.\d{3}\s+–\s+(?:[A-Za-z]{3}\/\d{2},\s*)?\d{2}:\d{2}:\d{2}\.\d{3})\]/g;
+
+export function compileTsForWire(expr: string): string {
+  // Fast path: the human form always contains the en-dash separator.
+  if (!expr.includes("–")) return expr;
+  const now = Date.now();
+  const today = new Date(now);
+  const defaults = { y: today.getFullYear(), m: today.getMonth(), d: today.getDate() };
+  return expr.replace(TS_HUMAN_RE, (whole, neg: string | undefined, inner: string) => {
+    const sep = inner.indexOf("–");
+    const loStr = inner.slice(0, sep).trim();
+    const hiStr = inner.slice(sep + 1).trim();
+    const lo = parseTsEndpoint(loStr, defaults, now);
+    const hi = parseTsEndpoint(hiStr, defaults, now);
+    if (lo == null || hi == null) return whole; // malformed — let server surface the error
+    return `${neg ?? ""}ts:[${lo}..${hi}]`;
+  });
 }

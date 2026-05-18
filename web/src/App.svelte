@@ -33,7 +33,7 @@
     DEFAULT_CHIPS,
     type QuickChip,
   } from "./lib/quick-filters";
-  import { parseClauses, withTimeRange, isSourceMuted, isSourceSoloed, setSourceMuted, setSourceSoloed, setBareFields } from "./lib/filter-dsl";
+  import { parseClauses, withTimeRange, compileTsForWire, isSourceMuted, isSourceSoloed, setSourceMuted, setSourceSoloed, setBareFields } from "./lib/filter-dsl";
   import Timeline from "./lib/Timeline.svelte";
   import LogRow from "./lib/LogRow.svelte";
   import ColumnsMenu from "./lib/ColumnsMenu.svelte";
@@ -563,7 +563,10 @@
   });
 
   function effectiveFilterFor(working: string): string {
-    return computeEffectiveFilter(working, quickChips);
+    // compileTsForWire translates any human-readable `ts:[HH:mm:ss.SSS – …]`
+    // clauses back to the unix `ts:[lo..hi]` form the server's range
+    // parser expects. Numeric ranges pass through unchanged.
+    return compileTsForWire(computeEffectiveFilter(working, quickChips));
   }
 
   function applyFilter() {
@@ -903,12 +906,21 @@
     return Math.round(r) + "/s";
   }
 
+  // Mute and solo are mutually exclusive on the same source: enabling
+  // one clears the other so a row can't simultaneously be hidden and
+  // be the only thing shown.
   function toggleMute(name: string) {
-    pendingFilter = setSourceMuted(pendingFilter, name, !isSourceMuted(pendingFilter, name));
+    const muting = !isSourceMuted(pendingFilter, name);
+    let expr = setSourceMuted(pendingFilter, name, muting);
+    if (muting) expr = setSourceSoloed(expr, name, false);
+    pendingFilter = expr;
     applyFilter();
   }
   function toggleSolo(name: string) {
-    pendingFilter = setSourceSoloed(pendingFilter, name, !isSourceSoloed(pendingFilter, name));
+    const soloing = !isSourceSoloed(pendingFilter, name);
+    let expr = setSourceSoloed(pendingFilter, name, soloing);
+    if (soloing) expr = setSourceMuted(expr, name, false);
+    pendingFilter = expr;
     applyFilter();
   }
   function onColumnsChange(next: Column[]) { columns = next; }
@@ -1268,6 +1280,11 @@
 </script>
 
 <div class="flex flex-col h-screen">
+  <!-- PWA accent: thin gradient stripe at the very top, visible only when
+       running as an installed app (display-mode: standalone). Matches the
+       solid dark-navy theme_color in manifest.webmanifest so the OS title
+       bar and the in-app stripe read as one continuous chrome band. -->
+  <div aria-hidden="true" class="pwa-accent"></div>
   <!-- top bar -->
   <header
     class="z-20 border-b border-zinc-200 dark:border-zinc-800 px-4 py-2 flex items-center gap-2 bg-white/70 dark:bg-zinc-900/70 backdrop-blur">
@@ -1591,29 +1608,41 @@
         {@const health = sourceHealthDot(src)}
         {@const muted = isSourceMuted(filter, src.name)}
         {@const soloed = isSourceSoloed(filter, src.name)}
-        <div class="mb-2 group" class:opacity-50={src.state === "closing"}>
+        <div class="mb-2 group relative pl-2" class:opacity-50={src.state === "closing"}>
+          {#if sources.length > 1}
+            <span class="absolute left-0 top-0 bottom-0 w-0.5 rounded-sm"
+                  style="background-color: {sourceColor(src.id)}"
+                  aria-hidden="true"></span>
+          {/if}
           <div class="flex items-center justify-between gap-1">
             <span class={`shrink-0 w-1.5 h-1.5 rounded-full ${health.cls}`} title={health.title}></span>
             <div class="mono text-xs truncate flex-1" title={src.name}>{src.name}</div>
             <span class="text-[10px] text-zinc-500 mono shrink-0" title={`${src.line_count ?? 0} lines total`}>{fmtRate(src.rate_ewma)}</span>
             <button
+              type="button"
               class={muted
-                ? "px-1 text-[10px] rounded bg-rose-600 text-white"
-                : "opacity-0 group-hover:opacity-100 px-1 text-[10px] rounded text-zinc-500 hover:bg-zinc-200 dark:hover:bg-zinc-800"}
-              title={muted ? "Unmute (currently hidden)" : "Mute — hide rows from this source"}
-              aria-label="mute source"
+                ? "p-0.5 rounded bg-rose-600 text-white"
+                : "p-0.5 rounded opacity-0 group-hover:opacity-100 text-zinc-500 hover:bg-zinc-200 dark:hover:bg-zinc-800"}
+              title={muted ? "Unmute — show rows from this source again" : "Mute — hide rows from this source"}
+              aria-label={muted ? "unmute source" : "mute source"}
               aria-pressed={muted}
-              onclick={() => toggleMute(src.name)}>M</button>
+              onclick={() => toggleMute(src.name)}>
+              <Icon name={muted ? "plus" : "minus"} size={12} />
+            </button>
             <button
+              type="button"
               class={soloed
-                ? "px-1 text-[10px] rounded bg-sky-600 text-white"
-                : "opacity-0 group-hover:opacity-100 px-1 text-[10px] rounded text-zinc-500 hover:bg-zinc-200 dark:hover:bg-zinc-800"}
+                ? "p-0.5 rounded bg-sky-600 text-white"
+                : "p-0.5 rounded opacity-0 group-hover:opacity-100 text-zinc-500 hover:bg-zinc-200 dark:hover:bg-zinc-800"}
               title={soloed ? "Unsolo" : "Solo — show only this source"}
-              aria-label="solo source"
+              aria-label={soloed ? "unsolo source" : "solo source"}
               aria-pressed={soloed}
-              onclick={() => toggleSolo(src.name)}>S</button>
+              onclick={() => toggleSolo(src.name)}>
+              <Icon name="crosshair" size={12} />
+            </button>
             <button
-              class="opacity-0 group-hover:opacity-100 text-zinc-500 hover:text-red-500 disabled:hover:text-zinc-500 disabled:cursor-not-allowed"
+              type="button"
+              class="p-0.5 rounded opacity-0 group-hover:opacity-100 text-zinc-500 hover:text-red-500 hover:bg-zinc-200 dark:hover:bg-zinc-800 disabled:hover:text-zinc-500 disabled:cursor-not-allowed"
               title={src.state === "closing" ? "Closing…" : "Remove"}
               aria-label="remove source"
               disabled={src.state === "closing"}

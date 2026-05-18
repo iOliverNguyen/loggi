@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { withTimeRange } from "./filter-dsl";
+  import { withTimeRange, compileTsForWire } from "./filter-dsl";
 
   let {
     filter,
@@ -45,6 +45,24 @@
   // to show all buckets in our window regardless of the brush's ts term,
   // otherwise the histogram and the brush would feed back into each other.
   let queryFilter = $derived(withTimeRange(filter, null, null));
+
+  // Keep the brush in sync with the filter's `ts:[…]` clause. Without this,
+  // removing the ts chip from the sidebar leaves an orphan selection on the
+  // strip. compileTsForWire normalizes both the human and numeric range
+  // shapes; the regex below then plucks the lo/hi as unix seconds.
+  // Boundary on the left side rules out negated `-ts:[…]` (exclusion clauses
+   // — those should not show as a positive brush selection).
+  const TS_WIRE_RE = /(?:^|\s|\()@?ts:\[(\d+)\.\.(\d+)\]/;
+  $effect(() => {
+    const m = TS_WIRE_RE.exec(compileTsForWire(filter));
+    if (m) {
+      brushLo = Number(m[1]);
+      brushHi = Number(m[2]);
+    } else {
+      brushLo = null;
+      brushHi = null;
+    }
+  });
 
   async function fetchData() {
     const t = Math.floor(Date.now() / 1000);

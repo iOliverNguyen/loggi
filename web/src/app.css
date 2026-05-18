@@ -18,6 +18,19 @@ body {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
+/* PWA accent stripe — see App.svelte. Hidden in browser mode so it doesn't
+   eat layout space; appears as a 6px gradient band only when loggi is
+   running as an installed app, where it visually extends the OS title bar
+   (theme_color #0a1a3a) into the page. */
+.pwa-accent { display: none; }
+@media (display-mode: standalone) {
+  .pwa-accent {
+    display: block;
+    height: 6px;
+    background-image: linear-gradient(90deg, #0a1a3a 0%, #16306a 50%, #0a1a3a 100%);
+  }
+}
+
 /* ANSI color rendering: see ansi.ts. */
 .ansi-30 { color: #4b5563; }
 .ansi-31 { color: #ef4444; }
