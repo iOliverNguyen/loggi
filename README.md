@@ -5,7 +5,7 @@ Svelte web UI that streams JSON-structured and ANSI-colored logs from files,
 stdin, or Docker containers. Multiple clients attach to the same server; the
 server auto-starts on demand.
 
-https://github.com/user-attachments/assets/f2074224-d77f-4d58-b31a-dde03916b5d6
+https://github.com/user-attachments/assets/681a7ae0-4024-45a8-be4a-7f15d4fede36
 
 ## Features
 
@@ -48,13 +48,13 @@ https://github.com/user-attachments/assets/f2074224-d77f-4d58-b31a-dde03916b5d6
   refcounts, content-addressed blob slab so a repeated 30 KB config dump
   is stored once across thousands of log lines.
 
-<img width="1800" height="1038" alt="json" src="https://github.com/user-attachments/assets/9546491a-15d2-4e70-9f19-910562809df9" />
+<img width="1800" height="1038" alt="Image" src="https://github.com/user-attachments/assets/1653e204-94a9-4308-ba2f-8c344501b1d6" />
 
-<img width="1800" height="1038" alt="filter" src="https://github.com/user-attachments/assets/e54bc04e-c853-425c-a145-fee7d3a36d0c" />
+<img width="1800" height="1038" alt="Image" src="https://github.com/user-attachments/assets/653890e5-6014-4f12-a4ec-a0ec0da80d08" />
 
-<img width="1800" height="1038" alt="columns" src="https://github.com/user-attachments/assets/6e37b600-7d12-48e7-90de-951892a9fdf1" />
+<img width="1800" height="1038" alt="Image" src="https://github.com/user-attachments/assets/c120ec94-3c35-4a01-adc5-a58655ede886" />
 
-<img width="1800" height="1038" alt="settings" src="https://github.com/user-attachments/assets/a12b8e76-f252-46a3-a244-3329bdf21fbe" />
+<img width="1800" height="1038" alt="Image" src="https://github.com/user-attachments/assets/3d5956d8-2c5f-4ced-af62-41d9a3844279" />
 
 ## Install
 
