@@ -149,6 +149,50 @@ func TestParseErrors(t *testing.T) {
 	}
 }
 
+// Dotted enum-style values must parse unquoted, both bare and parenthesized.
+// Regression: previously `error_code:ITG.SFTP_SEND_OUT_SETUP` errored because
+// `.` was always a delimiter; in parens it surfaced as `missing ')'`.
+func TestDottedUnquotedValue(t *testing.T) {
+	good := []string{
+		"error_code:ITG.SFTP_SEND_OUT_SETUP",
+		"(error_code:ITG.SFTP_SEND_OUT_SETUP)",
+		"error_code:foo.bar OR error_code:baz.qux",
+		"latency:[1.5..2.5]",
+		"@msg_batch_conf.ConsumerQos:>=50",
+	}
+	for _, q := range good {
+		if _, err := Parse(q); err != nil {
+			t.Errorf("Parse(%q): unexpected error: %v", q, err)
+		}
+	}
+
+	// End-to-end: a dotted value must equality-match a row whose field
+	// holds that exact string.
+	s := store.New(store.Options{Cap: 8})
+	rows := []map[string]any{
+		{"level": "error", "error_code": "ITG.SFTP_SEND_OUT_SETUP", "msg": "send-out failed"},
+		{"level": "error", "error_code": "OTHER", "msg": "other"},
+	}
+	for _, r := range rows {
+		raw, _ := json.Marshal(r)
+		s.Publish(store.AppendInput{JSON: raw})
+	}
+	got, err := count(s, "error_code:ITG.SFTP_SEND_OUT_SETUP")
+	if err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if got != 1 {
+		t.Fatalf("error_code:ITG.SFTP_SEND_OUT_SETUP want 1 got %d", got)
+	}
+	got, err = count(s, "(error_code:ITG.SFTP_SEND_OUT_SETUP)")
+	if err != nil {
+		t.Fatalf("count(parens): %v", err)
+	}
+	if got != 1 {
+		t.Fatalf("(error_code:ITG.SFTP_SEND_OUT_SETUP) want 1 got %d", got)
+	}
+}
+
 // `field:*` (and any all-stars variant) is the existence predicate:
 // the field must be set & non-empty.
 func TestExistsPredicate(t *testing.T) {

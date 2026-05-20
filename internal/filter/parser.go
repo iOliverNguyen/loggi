@@ -292,7 +292,19 @@ func (p *parser) tokenize() {
 
 		// Identifier / glob / keyword
 		j := i
-		for j < len(s) && !isSpace(s[j]) && !isDelim(s[j]) {
+		inVal := p.expectingValue()
+		for j < len(s) && !isSpace(s[j]) {
+			c := s[j]
+			// In value position a single `.` between non-space chars is part
+			// of the value (e.g. `error_code:ITG.SFTP_SEND_OUT_SETUP`).
+			// `..` stays a delimiter so range syntax `[1..3]` keeps working.
+			if inVal && c == '.' && j+1 < len(s) && s[j+1] != '.' && !isSpace(s[j+1]) {
+				j++
+				continue
+			}
+			if isDelim(c) {
+				break
+			}
 			j++
 		}
 		word := s[i:j]

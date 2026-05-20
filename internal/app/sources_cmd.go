@@ -85,15 +85,47 @@ func NewWebCmd() *cobra.Command {
 	return cmd
 }
 
-// RunDefault is the bare `loggi` command — opens the web UI on the default
-// profile, with no source attached.
+// RunDefault is the bare `loggi` command. It dispatches based on input:
+//   - positional file args                 → tail each file as a source
+//   - piped stdin (not a tty)              → ingest stdin as a named source
+//   - both                                 → both, with --name applying to stdin
+//   - neither                              → open the web UI on the default profile
 func RunDefault(cmd *cobra.Command, args []string) error {
+	noOpen, _ := cmd.Flags().GetBool("no-open")
+	name, _ := cmd.Flags().GetString("name")
+	hasFiles := len(args) > 0
+	hasPipe := isPipedStdin()
+
+	if hasFiles && hasPipe {
+		if err := tailFiles(args, false); err != nil {
+			return err
+		}
+		return runStdin(name, !noOpen)
+	}
+	if hasFiles {
+		return tailFiles(args, !noOpen)
+	}
+	if hasPipe {
+		return runStdin(name, !noOpen)
+	}
 	info, err := ensureServer()
 	if err != nil {
 		return err
 	}
 	fmt.Println(info.HTTP)
+	if noOpen {
+		return nil
+	}
 	return openBrowser(info.HTTP)
+}
+
+// isPipedStdin reports whether stdin is a pipe or redirected file (not a tty).
+func isPipedStdin() bool {
+	info, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeCharDevice == 0
 }
 
 // --- impl ---

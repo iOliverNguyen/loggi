@@ -1,13 +1,14 @@
 <script lang="ts">
   import Icon from "./Icon.svelte";
 
-  let { fieldValues, pendingFilter, onAddClause, onRemoveClause, onReplace, isClauseActive } = $props<{
+  let { fieldValues, pendingFilter, onAddClause, onRemoveClause, onReplace, isClauseActive, pinnedOnly = false } = $props<{
     fieldValues: Map<string, Map<string, number>>;
     pendingFilter: string;
     onAddClause: (clause: string) => void;
     onRemoveClause: (clause: string) => void;
     onReplace: (clause: string) => void;
     isClauseActive: (clause: string) => boolean;
+    pinnedOnly?: boolean;
   }>();
 
   const TOP_VALUES = 8;
@@ -81,7 +82,9 @@
   let sortedKeys = $derived.by(() => {
     const arr: { key: string; values: Map<string, number>; score: number; pinned: boolean }[] = [];
     for (const [key, values] of fieldValues) {
-      arr.push({ key, values, score: keyScore(values), pinned: pinnedKeys.has(key) });
+      const pinned = pinnedKeys.has(key);
+      if (pinnedOnly && !pinned) continue;
+      arr.push({ key, values, score: keyScore(values), pinned });
     }
     arr.sort((a, b) => {
       if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
@@ -143,7 +146,7 @@
 </script>
 
 {#if sortedKeys.length === 0}
-  <p class="text-[11px] text-zinc-500">No fields seen yet.</p>
+  {#if !pinnedOnly}<p class="text-[11px] text-zinc-500">No fields seen yet.</p>{/if}
 {:else}
   <ul class="space-y-0.5">
     {#each sortedKeys as { key, values, pinned } (key)}

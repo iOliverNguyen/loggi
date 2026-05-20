@@ -10,6 +10,7 @@
     count,
     children,
     headerExtra,
+    alwaysShow,
     open = $bindable(),
   } = $props<{
     id: string;
@@ -18,6 +19,7 @@
     count?: number | string;
     children: Snippet<[{ open: boolean }]>;
     headerExtra?: Snippet<[{ open: boolean }]>;
+    alwaysShow?: Snippet<[{ open: boolean }]>;
     open?: boolean;
   }>();
 
@@ -44,4 +46,5 @@
     {#if headerExtra}<div class="flex items-center gap-1 shrink-0">{@render headerExtra({ open })}</div>{/if}
   </div>
   {#if open}{@render children({ open })}{/if}
+  {#if !open && alwaysShow}{@render alwaysShow({ open })}{/if}
 </section>

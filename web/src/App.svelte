@@ -178,6 +178,7 @@
   let showAddSource = $state(false);
   let filtersOpen = $state<boolean | undefined>(undefined);
   let sourcesOpen = $state<boolean | undefined>(undefined);
+  let facetsOpen = $state<boolean | undefined>(undefined);
   let filterAddClause = $state(false);
   let showFilters = $state((localStorage.getItem("loggi.showFilters") ?? "1") !== "0");
   $effect(() => {
@@ -1586,7 +1587,7 @@
           }} />
       </SidebarSection>
 
-      <SidebarSection id="facets" label="Facets" count={fieldValues.size}>
+      <SidebarSection id="facets" label="Facets" count={fieldValues.size} bind:open={facetsOpen}>
         <FacetPanel
           {fieldValues}
           {pendingFilter}
@@ -1594,6 +1595,16 @@
           onRemoveClause={removeFilterClause}
           onReplace={filterOnlyClause}
           isClauseActive={isFilterClauseActive} />
+        {#snippet alwaysShow()}
+          <FacetPanel
+            {fieldValues}
+            {pendingFilter}
+            onAddClause={addFilterClause}
+            onRemoveClause={removeFilterClause}
+            onReplace={filterOnlyClause}
+            isClauseActive={isFilterClauseActive}
+            pinnedOnly />
+        {/snippet}
       </SidebarSection>
 
       <SidebarSection id="sources" label="Sources" count={sources.length} bind:open={sourcesOpen}>
