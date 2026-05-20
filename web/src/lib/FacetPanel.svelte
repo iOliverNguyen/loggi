@@ -48,14 +48,18 @@
     } catch {}
   }
 
-  let pinnedKeys = $state(loadSet("loggi.facets.pinnedKeys"));
-  let pinnedValues = $state(loadMap("loggi.facets.pinnedValues"));
+  // bookmarked = ★ sort-to-top within the open panel.
+  // pinned     = 📌 always shown, even when the Facets section is collapsed.
+  let bookmarkedKeys = $state(loadSet("loggi.facets.bookmarkedKeys"));
+  let bookmarkedValues = $state(loadMap("loggi.facets.bookmarkedValues"));
+  let pinnedKeys = $state(loadSet("loggi.facets.pinKeys"));
   let openKeys = $state(loadSet("loggi.facets.openKeys"));
   let expandedKeys = $state(new Set<string>()); // "show more" expanded per key
   let valueSearch = $state(new Map<string, string>());
 
-  $effect(() => saveSet("loggi.facets.pinnedKeys", pinnedKeys));
-  $effect(() => saveMap("loggi.facets.pinnedValues", pinnedValues));
+  $effect(() => saveSet("loggi.facets.bookmarkedKeys", bookmarkedKeys));
+  $effect(() => saveMap("loggi.facets.bookmarkedValues", bookmarkedValues));
+  $effect(() => saveSet("loggi.facets.pinKeys", pinnedKeys));
   $effect(() => saveSet("loggi.facets.openKeys", openKeys));
 
   function fieldRef(key: string): string {
@@ -80,18 +84,26 @@
   }
 
   let sortedKeys = $derived.by(() => {
-    const arr: { key: string; values: Map<string, number>; score: number; pinned: boolean }[] = [];
+    const arr: { key: string; values: Map<string, number>; score: number; bookmarked: boolean; pinned: boolean }[] = [];
     for (const [key, values] of fieldValues) {
       const pinned = pinnedKeys.has(key);
       if (pinnedOnly && !pinned) continue;
-      arr.push({ key, values, score: keyScore(values), pinned });
+      const bookmarked = bookmarkedKeys.has(key);
+      arr.push({ key, values, score: keyScore(values), bookmarked, pinned });
     }
     arr.sort((a, b) => {
       if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+      if (a.bookmarked !== b.bookmarked) return a.bookmarked ? -1 : 1;
       return b.score - a.score;
     });
     return arr;
   });
+
+  function toggleBookmarkKey(key: string) {
+    if (bookmarkedKeys.has(key)) bookmarkedKeys.delete(key);
+    else bookmarkedKeys.add(key);
+    bookmarkedKeys = new Set(bookmarkedKeys);
+  }
 
   function togglePinKey(key: string) {
     if (pinnedKeys.has(key)) pinnedKeys.delete(key);
@@ -99,16 +111,16 @@
     pinnedKeys = new Set(pinnedKeys);
   }
 
-  function togglePinValue(key: string, value: string) {
-    let set = pinnedValues.get(key);
+  function toggleBookmarkValue(key: string, value: string) {
+    let set = bookmarkedValues.get(key);
     if (!set) {
       set = new Set();
-      pinnedValues.set(key, set);
+      bookmarkedValues.set(key, set);
     }
     if (set.has(value)) set.delete(value);
     else set.add(value);
-    if (set.size === 0) pinnedValues.delete(key);
-    pinnedValues = new Map(pinnedValues);
+    if (set.size === 0) bookmarkedValues.delete(key);
+    bookmarkedValues = new Map(bookmarkedValues);
   }
 
   function toggleOpen(key: string) {
@@ -123,16 +135,16 @@
     expandedKeys = new Set(expandedKeys);
   }
 
-  function valuesFor(key: string, values: Map<string, number>): { value: string; count: number; pinned: boolean }[] {
-    const pinnedSet = pinnedValues.get(key) ?? new Set<string>();
+  function valuesFor(key: string, values: Map<string, number>): { value: string; count: number; bookmarked: boolean }[] {
+    const bookmarkedSet = bookmarkedValues.get(key) ?? new Set<string>();
     const search = (valueSearch.get(key) ?? "").toLowerCase();
-    const out: { value: string; count: number; pinned: boolean }[] = [];
+    const out: { value: string; count: number; bookmarked: boolean }[] = [];
     for (const [value, count] of values) {
       if (search && !value.toLowerCase().includes(search)) continue;
-      out.push({ value, count, pinned: pinnedSet.has(value) });
+      out.push({ value, count, bookmarked: bookmarkedSet.has(value) });
     }
     out.sort((a, b) => {
-      if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+      if (a.bookmarked !== b.bookmarked) return a.bookmarked ? -1 : 1;
       return b.count - a.count;
     });
     return out;
@@ -149,13 +161,13 @@
   {#if !pinnedOnly}<p class="text-[11px] text-zinc-500">No fields seen yet.</p>{/if}
 {:else}
   <ul class="space-y-0.5">
-    {#each sortedKeys as { key, values, pinned } (key)}
+    {#each sortedKeys as { key, values, bookmarked, pinned } (key)}
       {@const isOpen = openKeys.has(key)}
       {@const isExpanded = expandedKeys.has(key)}
       {@const list = isOpen ? valuesFor(key, values) : []}
       {@const visible = isExpanded ? list : list.slice(0, TOP_VALUES)}
       {@const hidden = list.length - visible.length}
-      <li class="group">
+      <li>
         <div class="flex items-center gap-1 px-1 -mx-1 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800">
           <button
             type="button"
@@ -168,17 +180,25 @@
           </button>
           <button
             type="button"
-            class="p-0.5 rounded transition-opacity"
-            class:opacity-0={!pinned}
-            class:group-hover:opacity-100={!pinned}
-            class:text-amber-500={pinned}
+            class="p-0.5 rounded shrink-0 hover:text-amber-600"
+            class:text-amber-500={bookmarked}
+            class:text-zinc-400={!bookmarked}
+            title={bookmarked ? "Remove bookmark" : "Bookmark facet (sort to top)"}
+            onclick={() => toggleBookmarkKey(key)}
+            aria-label={bookmarked ? "remove bookmark" : "bookmark facet"}
+            aria-pressed={bookmarked}>
+            <Icon name={bookmarked ? "star-filled" : "star"} size={10} />
+          </button>
+          <button
+            type="button"
+            class="p-0.5 rounded shrink-0 hover:text-sky-600"
+            class:text-sky-500={pinned}
             class:text-zinc-400={!pinned}
-            class:hover:text-amber-600={!pinned}
-            title={pinned ? "Unpin facet" : "Pin facet to top"}
+            title={pinned ? "Unpin facet (hide when section collapsed)" : "Pin facet (always show, even when section collapsed)"}
             onclick={() => togglePinKey(key)}
             aria-label={pinned ? "unpin facet" : "pin facet"}
             aria-pressed={pinned}>
-            <Icon name={pinned ? "star-filled" : "star"} size={10} />
+            <Icon name="pin" size={10} />
           </button>
         </div>
         {#if isOpen}
@@ -198,7 +218,7 @@
             {#each visible as v (v.value)}
               {@const clause = clauseFor(key, v.value)}
               {@const active = isClauseActive(clause)}
-              <li class="group/v">
+              <li>
                 <div
                   class="flex items-center gap-1 px-1.5 py-0.5 rounded cursor-pointer"
                   class:bg-sky-100={active}
@@ -214,12 +234,14 @@
                   <span class="text-[10px] text-zinc-400 mono shrink-0">{v.count}</span>
                   <button
                     type="button"
-                    class={`p-0.5 rounded transition-opacity shrink-0 ${v.pinned ? "text-amber-500 hover:text-amber-600" : "opacity-0 group-hover/v:opacity-100 text-zinc-400 hover:text-amber-600"}`}
-                    title={v.pinned ? "Unpin value" : "Pin value to top"}
-                    onclick={(e) => { e.stopPropagation(); togglePinValue(key, v.value); }}
-                    aria-label={v.pinned ? "unpin value" : "pin value"}
-                    aria-pressed={v.pinned}>
-                    <Icon name={v.pinned ? "star-filled" : "star"} size={9} />
+                    class="p-0.5 rounded shrink-0 hover:text-amber-600"
+                    class:text-amber-500={v.bookmarked}
+                    class:text-zinc-400={!v.bookmarked}
+                    title={v.bookmarked ? "Remove bookmark" : "Bookmark value (sort to top)"}
+                    onclick={(e) => { e.stopPropagation(); toggleBookmarkValue(key, v.value); }}
+                    aria-label={v.bookmarked ? "remove bookmark" : "bookmark value"}
+                    aria-pressed={v.bookmarked}>
+                    <Icon name={v.bookmarked ? "star-filled" : "star"} size={9} />
                   </button>
                 </div>
               </li>
