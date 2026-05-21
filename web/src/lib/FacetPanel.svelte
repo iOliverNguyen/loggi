@@ -167,7 +167,7 @@
       {@const list = isOpen ? valuesFor(key, values) : []}
       {@const visible = isExpanded ? list : list.slice(0, TOP_VALUES)}
       {@const hidden = list.length - visible.length}
-      <li>
+      <li class="group">
         <div class="flex items-center gap-1 px-1 -mx-1 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800">
           <button
             type="button"
@@ -180,9 +180,11 @@
           </button>
           <button
             type="button"
-            class="p-0.5 rounded shrink-0 hover:text-amber-600"
+            class="p-0.5 rounded shrink-0 transition-opacity hover:text-amber-600"
             class:text-amber-500={bookmarked}
             class:text-zinc-400={!bookmarked}
+            class:opacity-0={!bookmarked}
+            class:group-hover:opacity-100={!bookmarked}
             title={bookmarked ? "Remove bookmark" : "Bookmark facet (sort to top)"}
             onclick={() => toggleBookmarkKey(key)}
             aria-label={bookmarked ? "remove bookmark" : "bookmark facet"}
@@ -191,9 +193,11 @@
           </button>
           <button
             type="button"
-            class="p-0.5 rounded shrink-0 hover:text-sky-600"
+            class="p-0.5 rounded shrink-0 transition-opacity hover:text-sky-600"
             class:text-sky-500={pinned}
             class:text-zinc-400={!pinned}
+            class:opacity-0={!pinned}
+            class:group-hover:opacity-100={!pinned}
             title={pinned ? "Unpin facet (hide when section collapsed)" : "Pin facet (always show, even when section collapsed)"}
             onclick={() => togglePinKey(key)}
             aria-label={pinned ? "unpin facet" : "pin facet"}
@@ -218,7 +222,7 @@
             {#each visible as v (v.value)}
               {@const clause = clauseFor(key, v.value)}
               {@const active = isClauseActive(clause)}
-              <li>
+              <li class="group/v">
                 <div
                   class="flex items-center gap-1 px-1.5 py-0.5 rounded cursor-pointer"
                   class:bg-sky-100={active}
@@ -234,9 +238,7 @@
                   <span class="text-[10px] text-zinc-400 mono shrink-0">{v.count}</span>
                   <button
                     type="button"
-                    class="p-0.5 rounded shrink-0 hover:text-amber-600"
-                    class:text-amber-500={v.bookmarked}
-                    class:text-zinc-400={!v.bookmarked}
+                    class={`p-0.5 rounded shrink-0 transition-opacity hover:text-amber-600 ${v.bookmarked ? "text-amber-500" : "text-zinc-400 opacity-0 group-hover/v:opacity-100"}`}
                     title={v.bookmarked ? "Remove bookmark" : "Bookmark value (sort to top)"}
                     onclick={(e) => { e.stopPropagation(); toggleBookmarkValue(key, v.value); }}
                     aria-label={v.bookmarked ? "remove bookmark" : "bookmark value"}
