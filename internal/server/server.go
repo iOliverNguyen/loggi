@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"os"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -748,11 +747,13 @@ func (s *Server) processLine(line source.RawLine) {
 		s.store.Publish(store.AppendInput{SourceID: line.SourceID, JSON: line.Bytes})
 	} else {
 		ansi, plain := stripANSI(line.Bytes)
+		ts, lvl := source.ParseTextLine(plain)
 		s.store.Publish(store.AppendInput{
 			SourceID: line.SourceID,
+			Ts:       ts,
 			Text:     plain,
 			AnsiBlob: ansi,
-			Level:    detectLevelHint(plain),
+			Level:    lvl,
 		})
 	}
 	// Health bookkeeping — cheap atomics on the hot path.
@@ -848,15 +849,6 @@ func isJSONObj(b []byte) bool {
 	return false
 }
 
-func detectLevelHint(line string) string {
-	upper := strings.ToUpper(line)
-	for _, lvl := range []string{"TRACE", "DEBUG", "INFO", "WARN", "ERROR", "FATAL"} {
-		if strings.Contains(upper, " "+lvl+" ") || strings.HasPrefix(upper, lvl+" ") {
-			return strings.ToLower(lvl)
-		}
-	}
-	return ""
-}
 
 // Idle timer: when no clients and no sources, start a timer; on expiry,
 // re-check (a session may have arrived since the timer was scheduled — Stop
