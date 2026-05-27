@@ -2,6 +2,7 @@ package client
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"time"
@@ -32,6 +33,21 @@ func ReadRuntime() (*RuntimeInfo, error) {
 		return nil, err
 	}
 	return &info, nil
+}
+
+// ReadRuntimeWait reads runtime.json, retrying while it is still absent until
+// timeout elapses. The server writes runtime.json as its final startup step — a
+// beat after the unix socket becomes connectable — so a client that just dialed a
+// freshly spawned server can momentarily race ahead of the write.
+func ReadRuntimeWait(timeout time.Duration) (*RuntimeInfo, error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		info, err := ReadRuntime()
+		if err == nil || !errors.Is(err, os.ErrNotExist) || !time.Now().Before(deadline) {
+			return info, err
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 // WriteRuntime writes runtime.json (called by the server on Start).

@@ -15,6 +15,15 @@ fi
 # They auto-register; no need to edit scripts/_cli.sh.
 # ============================================================================
 
+# loggi-hint prints the post-build usage cheat-sheet. Not a `run-` function, so
+# the dispatcher won't expose it as a subcommand.
+loggi-hint() {
+  echo
+  printf "   $(p-blue "./loggi")                     open the web UI\n"
+  printf "   $(p-blue "./loggi <file> ...")          tail one or more files\n"
+  printf "   $(p-blue "tail -f app.log | ./loggi")   pipe logs in\n"
+}
+
 run-build-web() {
   usage-prompt "./run build-web — install web deps and build the embedded SPA" "$1"
   p-info "pnpm install + build → internal/app/spa/"
@@ -31,6 +40,7 @@ run-build() {
   p-info "go build ./cmd/loggi → ./loggi"
   cd "$PROJECT_ROOT" && go build -o loggi ./cmd/loggi
   p-success "loggi binary built ($(ls -lh loggi | awk '{print $5}'))"
+  loggi-hint
 }
 
 run-build-all() {
@@ -49,7 +59,8 @@ run-build-all() {
   p-info "go build ./cmd/loggi → ./loggi"
   cd "$PROJECT_ROOT" && go build -o loggi ./cmd/loggi
 
-  p-success "loggi built ($(ls -lh loggi | awk '{print $5}')) — try ./loggi tail <file>  or  ./run server"
+  p-success "loggi built ($(ls -lh loggi | awk '{print $5}'))"
+  loggi-hint
 }
 
 run-dev-web() {

@@ -5,13 +5,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/iOliverNguyen/loggi/internal/client"
+	"github.com/iOliverNguyen/loggi/internal/config"
+	"github.com/iOliverNguyen/loggi/internal/server"
 	"github.com/iOliverNguyen/loggi/internal/wire"
 	"github.com/spf13/cobra"
 )
@@ -70,13 +75,13 @@ func NewWebCmd() *cobra.Command {
 		Use:   "web",
 		Short: "Ensure the server is running and open the web UI",
 		RunE: func(_ *cobra.Command, _ []string) error {
-			info, err := ensureServer()
+			url, err := ensureServer()
 			if err != nil {
 				return err
 			}
-			fmt.Println(info.HTTP)
+			fmt.Println(url)
 			if !noOpen {
-				_ = openBrowser(info.HTTP)
+				_ = openBrowser(url)
 			}
 			return nil
 		},
@@ -108,15 +113,15 @@ func RunDefault(cmd *cobra.Command, args []string) error {
 	if hasPipe {
 		return runStdin(name, !noOpen)
 	}
-	info, err := ensureServer()
+	url, err := ensureServer()
 	if err != nil {
 		return err
 	}
-	fmt.Println(info.HTTP)
+	fmt.Println(url)
 	if noOpen {
 		return nil
 	}
-	return openBrowser(info.HTTP)
+	return openBrowser(url)
 }
 
 // isPipedStdin reports whether stdin is a pipe or redirected file (not a tty).
@@ -130,13 +135,62 @@ func isPipedStdin() bool {
 
 // --- impl ---
 
-func ensureServer() (*client.RuntimeInfo, error) {
+// ensureServer makes sure a server is running (auto-starting it) and returns
+// its web URL.
+func ensureServer() (string, error) {
 	conn, err := client.Dial(true)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	_ = conn.Close()
-	return client.ReadRuntime()
+	url := serverHTTPURL()
+	if url == "" {
+		return "", errors.New("server is running but its web address could not be determined")
+	}
+	return url, nil
+}
+
+// serverHTTPURL resolves the running server's web URL. runtime.json is
+// authoritative (and the only source for a dynamic ":0" port), so it is tried
+// first. When it's absent — a freshly spawned server may not have written it
+// yet, or an older server is holding the socket and never wrote it at all — the
+// URL is derived from the configured bind address, which the server binds to
+// the same way.
+func serverHTTPURL() string {
+	if info, err := client.ReadRuntime(); err == nil {
+		return info.HTTP
+	}
+	loaded, err := config.Load(mustGetwd())
+	if err != nil {
+		return ""
+	}
+	url := httpURLFromBind(loaded.Config.Server.HTTPBind)
+	if strings.HasSuffix(url, ":0") {
+		// Dynamic port: the bind address can't tell us the real port, so wait
+		// for the server to publish it in runtime.json.
+		if info, err := client.ReadRuntimeWait(2 * time.Second); err == nil {
+			return info.HTTP
+		}
+	}
+	return url
+}
+
+// httpURLFromBind turns a "host:port" bind address into an "http://host:port"
+// URL, normalizing a wildcard/empty host to a loopback address a browser can
+// open. An empty bind maps to the server's default, mirroring how the server
+// resolves an unset HTTPBind.
+func httpURLFromBind(bind string) string {
+	if bind == "" {
+		bind = server.DefaultHTTPBind
+	}
+	host, port, err := net.SplitHostPort(bind)
+	if err != nil {
+		return "http://" + bind
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+	return "http://" + net.JoinHostPort(host, port)
 }
 
 func tailFiles(paths []string, openUI bool) error {
@@ -176,9 +230,10 @@ func tailFiles(paths []string, openUI bool) error {
 		}
 		fmt.Printf("added file source: %s\n", abs)
 	}
-	info, _ := client.ReadRuntime()
-	if openUI && info != nil {
-		_ = openBrowser(info.HTTP)
+	if openUI {
+		if url := serverHTTPURL(); url != "" {
+			_ = openBrowser(url)
+		}
 	}
 	return nil
 }
@@ -215,9 +270,10 @@ func tailDocker(name string, openUI bool) error {
 		}
 	}
 	fmt.Printf("added docker source: %s\n", name)
-	info, _ := client.ReadRuntime()
-	if openUI && info != nil {
-		_ = openBrowser(info.HTTP)
+	if openUI {
+		if url := serverHTTPURL(); url != "" {
+			_ = openBrowser(url)
+		}
 	}
 	return nil
 }
@@ -229,8 +285,8 @@ func runStdin(name string, openUI bool) error {
 	}
 	defer conn.Close()
 	if err := conn.Write(&wire.ClientMsg{
-		Type: wire.CMsgAddSource,
-		ID:   1,
+		Type:      wire.CMsgAddSource,
+		ID:        1,
 		AddSource: &wire.AddSource{Kind: "stdin", Name: name},
 	}); err != nil {
 		return err
@@ -252,12 +308,12 @@ func runStdin(name string, openUI bool) error {
 			return errors.New(resp.Err.Detail)
 		}
 	}
-	info, _ := client.ReadRuntime()
-	if openUI && info != nil {
-		_ = openBrowser(info.HTTP)
+	url := serverHTTPURL()
+	if openUI && url != "" {
+		_ = openBrowser(url)
 	}
-	if info != nil {
-		fmt.Fprintf(os.Stderr, "loggi stdin: forwarding to source %d (web: %s)\n", srcID, info.HTTP)
+	if url != "" {
+		fmt.Fprintf(os.Stderr, "loggi stdin: forwarding to source %d (web: %s)\n", srcID, url)
 	} else {
 		fmt.Fprintf(os.Stderr, "loggi stdin: forwarding to source %d\n", srcID)
 	}

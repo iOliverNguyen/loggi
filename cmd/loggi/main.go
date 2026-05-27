@@ -18,9 +18,10 @@ attach to the same server; the server is auto-started on demand.
 
 Quick start:
   loggi                                  — open the web UI
-  loggi a.log b.log                      — tail one or more files
-  cat a.log | loggi --name 'Log A'       — ingest piped stdin as a named source
-  cat a.log | loggi b.log --name 'Log A' — both: tail b.log AND ingest stdin`,
+  loggi <file> ...                       — tail one or more files
+  tail -f app.log | loggi                — pipe stdin in (stdin is optional)
+  cat a.log | loggi --name 'Log A'       — name the piped source
+  cat a.log | loggi b.log                — both: tail b.log AND ingest stdin`,
 		Args: cobra.ArbitraryArgs,
 		RunE: app.RunDefault,
 	}
