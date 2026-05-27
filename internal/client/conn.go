@@ -4,12 +4,14 @@
 package client
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -55,6 +57,15 @@ func Dial(autoStart bool) (*Conn, error) {
 	// Stale socket?
 	_ = os.Remove(sockPath)
 
+	// Note server.log's size before spawning so that, if the daemon dies
+	// during startup, we can surface what it logged rather than a generic
+	// timeout.
+	logPath, _ := config.ServerLogFile()
+	var logOffset int64
+	if fi, statErr := os.Stat(logPath); statErr == nil {
+		logOffset = fi.Size()
+	}
+
 	if err := spawnDaemon(); err != nil {
 		return nil, err
 	}
@@ -68,7 +79,34 @@ func Dial(autoStart bool) (*Conn, error) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
+	if reason := serverStartError(logPath, logOffset); reason != "" {
+		return nil, fmt.Errorf("loggi server failed to start: %s", reason)
+	}
 	return nil, errors.New("server did not become reachable in time")
+}
+
+// serverStartError reads what the daemon appended to server.log since offset
+// and returns the last error line, so a failed spawn surfaces its real reason
+// (e.g. a port conflict) instead of a generic timeout. Returns "" if nothing
+// useful was logged.
+func serverStartError(logPath string, offset int64) string {
+	data, err := os.ReadFile(logPath)
+	if err != nil || int64(len(data)) <= offset {
+		return ""
+	}
+	var reason string
+	for _, ln := range bytes.Split(data[offset:], []byte("\n")) {
+		if bytes.Contains(ln, []byte("rror:")) {
+			reason = strings.TrimSpace(string(ln))
+		}
+	}
+	// Drop the daemon's own "error:"/"Error:" prefix so the wrapped message
+	// doesn't read "failed to start: error: …".
+	reason = strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(reason, "Error:"), "error:"))
+	if strings.Contains(reason, "address already in use") {
+		reason += " (another loggi may be running — try `loggi server stop`)"
+	}
+	return reason
 }
 
 // ErrServerDown is returned by Dial when autoStart is false and no server is up.

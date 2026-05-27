@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -139,15 +140,32 @@ func isPipedStdin() bool {
 // its web URL.
 func ensureServer() (string, error) {
 	conn, err := client.Dial(true)
+	if err == nil {
+		_ = conn.Close()
+		url := serverHTTPURL()
+		if url == "" {
+			return "", errors.New("server is running but its web address could not be determined")
+		}
+		return url, nil
+	}
+	// Dial failed — e.g. another loggi already holds the HTTP port, so our
+	// daemon couldn't bind it. If a loggi is already serving the configured
+	// address, reuse it (just open its UI) rather than failing.
+	if url := serverHTTPURL(); url != "" && loggiServingAt(url) {
+		return url, nil
+	}
+	return "", err
+}
+
+// loggiServingAt reports whether a loggi server answers /api/health at url.
+func loggiServingAt(url string) bool {
+	c := &http.Client{Timeout: 500 * time.Millisecond}
+	resp, err := c.Get(url + "/api/health")
 	if err != nil {
-		return "", err
+		return false
 	}
-	_ = conn.Close()
-	url := serverHTTPURL()
-	if url == "" {
-		return "", errors.New("server is running but its web address could not be determined")
-	}
-	return url, nil
+	defer resp.Body.Close()
+	return resp.StatusCode == http.StatusOK
 }
 
 // serverHTTPURL resolves the running server's web URL. runtime.json is
