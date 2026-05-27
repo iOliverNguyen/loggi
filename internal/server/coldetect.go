@@ -110,8 +110,10 @@ func (s *Server) finalizeRecommendation(id uint64, cols []string) {
 	}
 	s.srcMu.Lock()
 	rec, ok := s.srcs[id]
+	var state string
 	if ok {
 		rec.pinnedColumns = cols
+		state = rec.state
 	}
 	s.srcMu.Unlock()
 	if !ok {
@@ -125,7 +127,7 @@ func (s *Server) finalizeRecommendation(id uint64, cols []string) {
 		SourceID: id,
 		Kind:     kind,
 		Name:     name,
-		State:    rec.state,
+		State:    state,
 		Mode:     rec.modeStr(),
 		Columns:  cols,
 	}
