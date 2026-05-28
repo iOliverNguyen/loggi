@@ -38,6 +38,19 @@ func Dial(autoStart bool) (*Conn, error) {
 		return nil, ErrServerDown
 	}
 
+	// Before spawning a new daemon, see whether a loggi is already running
+	// but using a non-default socket path (e.g. different $TMPDIR, or its
+	// runtime.json got wiped). Discovering via /api/health lets us reuse
+	// the running daemon instead of failing to spawn a duplicate.
+	if h, _ := DiscoverRunningDaemon(); h != nil && h.Socket != "" && h.Socket != sockPath {
+		if c, err := net.DialTimeout("unix", h.Socket, 200*time.Millisecond); err == nil {
+			return &Conn{c: c}, nil
+		}
+		// Fall through to spawn — discovered socket isn't reachable from
+		// this process (perms, deleted file). The existing spawn path will
+		// then bind-fail and surface a clear "address already in use" hint.
+	}
+
 	// Acquire lock to avoid racing two clients into spawning two daemons.
 	lockPath := config.LockPath()
 	lf, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)

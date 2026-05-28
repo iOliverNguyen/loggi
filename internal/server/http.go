@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -539,6 +540,11 @@ func (s *Server) handleAPIHealth(w http.ResponseWriter, _ *http.Request) {
 		"sources_open": open,
 		"sessions":     s.sessionCnt.Load(),
 		"started_unix": s.startedAt.Unix(),
+		// pid + socket let off-host (or pidfile-less) clients discover and
+		// signal the running daemon without needing runtime.json. See
+		// internal/client/conn.go Dial fallback and the status/stop commands.
+		"pid":    os.Getpid(),
+		"socket": s.opts.SocketPath,
 	})
 }
 

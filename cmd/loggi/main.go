@@ -29,6 +29,11 @@ Quick start:
 	root.Flags().Bool("no-open", false, "don't open the browser")
 
 	root.AddCommand(app.NewServerCmd())
+	root.AddCommand(&cobra.Command{
+		Use:   "status",
+		Short: "Show daemon status (alias for `loggi server status`)",
+		RunE:  func(_ *cobra.Command, _ []string) error { return app.StatusServer() },
+	})
 	root.AddCommand(app.NewTailCmd())
 	root.AddCommand(app.NewStdinCmd())
 	root.AddCommand(app.NewDockerCmd())

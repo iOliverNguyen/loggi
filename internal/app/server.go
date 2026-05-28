@@ -1,6 +1,7 @@
 package app
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -127,34 +128,103 @@ func runServer(_ bool, debug bool) error {
 	return nil
 }
 
+// stopServer SIGTERMs the running daemon. Prefers the pidfile (managed
+// daemons) but falls back to discovering a running loggi via /api/health
+// when the pidfile is missing — e.g. the daemon was started under a
+// different $TMPDIR, or the pidfile was wiped. Returns "no server
+// running" only when neither lookup finds anything.
 func stopServer() error {
-	pidStr, err := os.ReadFile(config.PidPath())
-	if err != nil {
-		return fmt.Errorf("no server running: %w", err)
+	if pid, ok := readPidfile(); ok {
+		return signalAndReport(pid, "")
 	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(pidStr)))
-	if err != nil {
-		return err
+	if h, url := client.DiscoverRunningDaemon(); h != nil {
+		return signalAndReport(h.PID, fmt.Sprintf(" (found via %s/api/health)", url))
 	}
-	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
-		return err
-	}
-	fmt.Println("sent SIGTERM to pid", pid)
+	fmt.Println("no server running")
 	return nil
 }
 
-func statusServer() error {
-	info, err := client.ReadRuntime()
+// signalAndReport sends SIGTERM to pid and prints a confirmation line.
+// EPERM (different user) becomes a directly-actionable message — there's
+// no recovery loggi itself can do.
+func signalAndReport(pid int, suffix string) error {
+	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
+		if errors.Is(err, syscall.EPERM) {
+			return fmt.Errorf("cannot stop pid %d: permission denied; kill it manually", pid)
+		}
+		return err
+	}
+	fmt.Printf("sent SIGTERM to pid %d%s\n", pid, suffix)
+	return nil
+}
+
+// readPidfile returns the pid from the local pidfile, or (0, false) if
+// the file is missing or unparseable.
+func readPidfile() (int, bool) {
+	b, err := os.ReadFile(config.PidPath())
 	if err != nil {
-		fmt.Println("no server running (no runtime.json)")
+		return 0, false
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	if err != nil || pid <= 0 {
+		return 0, false
+	}
+	return pid, true
+}
+
+// StatusServer is the public entry point for `loggi server status` and
+// the top-level `loggi status` alias. Uses runtime.json when available;
+// otherwise probes /api/health on the configured port so a daemon
+// running without a usable runtime.json still shows up.
+func StatusServer() error { return statusServer() }
+
+func statusServer() error {
+	if info, err := client.ReadRuntime(); err == nil {
+		// runtime.json is authoritative. Cross-check by probing
+		// /api/health so a stale runtime (pid recycled, daemon dead)
+		// doesn't masquerade as healthy.
+		if h, err := client.DiscoverViaHealth(info.HTTP); err == nil {
+			printStatus(info.PID, info.Socket, info.HTTP, time.Since(info.Started).Round(time.Second), h, "")
+			return nil
+		}
+		fmt.Printf("pid:    %d\n", info.PID)
+		fmt.Printf("socket: %s\n", info.Socket)
+		fmt.Printf("http:   %s\n", info.HTTP)
+		fmt.Printf("mcp:    %s/mcp\n", info.HTTP)
+		fmt.Printf("uptime: %s\n", time.Since(info.Started).Round(time.Second))
+		fmt.Println("note:   /api/health is not responding — daemon may be stuck or dead")
 		return nil
 	}
-	fmt.Printf("pid:    %d\n", info.PID)
-	fmt.Printf("socket: %s\n", info.Socket)
-	fmt.Printf("http:   %s\n", info.HTTP)
-	fmt.Printf("mcp:    %s/mcp\n", info.HTTP)
-	fmt.Printf("uptime: %s\n", time.Since(info.Started).Round(time.Second))
+	// No runtime.json — try HTTP discovery against config-bind.
+	if h, url := client.DiscoverRunningDaemon(); h != nil {
+		uptime := time.Duration(0)
+		if h.StartedUnix > 0 {
+			uptime = time.Since(time.Unix(h.StartedUnix, 0)).Round(time.Second)
+		}
+		printStatus(h.PID, h.Socket, url, uptime, h, "(no runtime.json; discovered via HTTP)")
+		return nil
+	}
+	fmt.Println("no server running")
 	return nil
+}
+
+// printStatus emits the multi-line status block. note is printed last
+// (with a "note:" prefix) when non-empty — used to flag a degraded path.
+func printStatus(pid int, socket, httpURL string, uptime time.Duration, h *client.Health, note string) {
+	fmt.Printf("pid:    %d\n", pid)
+	if socket != "" {
+		fmt.Printf("socket: %s\n", socket)
+	}
+	fmt.Printf("http:   %s\n", httpURL)
+	fmt.Printf("mcp:    %s/mcp\n", httpURL)
+	fmt.Printf("uptime: %s\n", uptime)
+	if h != nil {
+		fmt.Printf("rows:   %d  sources: %d (%d open)  sessions: %d\n",
+			h.Rows, h.Sources, h.SourcesOpen, h.Sessions)
+	}
+	if note != "" {
+		fmt.Printf("note:   %s\n", note)
+	}
 }
 
 func mustGetwd() string {
