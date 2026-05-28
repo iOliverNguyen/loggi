@@ -58,6 +58,13 @@ func (s *Server) serveHTTP(l net.Listener) {
 	mux.HandleFunc("/api/columns", s.handleAPIColumns)
 	mux.HandleFunc("/api/source-prefs", s.handleAPISourcePrefs)
 	mux.HandleFunc("/api/histogram", s.handleAPIHistogram)
+	if s.opts.MCPHandler != nil {
+		// Streamable HTTP MCP transport. Both the exact path and the
+		// /mcp/ subtree are registered because mcp-go's default endpoint
+		// path is "/mcp" but some clients append a trailing slash.
+		mux.Handle("/mcp", s.opts.MCPHandler)
+		mux.Handle("/mcp/", s.opts.MCPHandler)
+	}
 	if s.opts.Debug {
 		mux.HandleFunc("/api/debug/filter", s.handleAPIDebugFilter)
 		mux.HandleFunc("/api/debug/store", s.handleAPIDebugStore)

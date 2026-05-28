@@ -9,8 +9,11 @@ import (
 	"syscall"
 	"time"
 
+	mcpserver "github.com/mark3labs/mcp-go/server"
+
 	"github.com/iOliverNguyen/loggi/internal/client"
 	"github.com/iOliverNguyen/loggi/internal/config"
+	"github.com/iOliverNguyen/loggi/internal/mcp"
 	"github.com/iOliverNguyen/loggi/internal/server"
 	"github.com/spf13/cobra"
 )
@@ -85,6 +88,10 @@ func runServer(_ bool, debug bool) error {
 		RepoRoot:        config.FindRepoRoot(mustGetwd()),
 		Debug:           debug,
 	})
+	// Mount the MCP Streamable HTTP handler at /mcp before Start so the
+	// listener begins serving it on the first request.
+	srv.SetMCPHandler(mcpserver.NewStreamableHTTPServer(mcp.New(srv)))
+
 	if err := srv.Start(); err != nil {
 		return err
 	}
@@ -107,6 +114,7 @@ func runServer(_ bool, debug bool) error {
 	}
 
 	fmt.Fprintf(os.Stderr, "loggi server: socket=%s http=%s\n", srv.SocketPath(), srv.HTTPURL())
+	fmt.Fprintf(os.Stderr, "loggi mcp:    %s/mcp  (or `loggi mcp` over stdio)\n", srv.HTTPURL())
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
@@ -144,6 +152,7 @@ func statusServer() error {
 	fmt.Printf("pid:    %d\n", info.PID)
 	fmt.Printf("socket: %s\n", info.Socket)
 	fmt.Printf("http:   %s\n", info.HTTP)
+	fmt.Printf("mcp:    %s/mcp\n", info.HTTP)
 	fmt.Printf("uptime: %s\n", time.Since(info.Started).Round(time.Second))
 	return nil
 }

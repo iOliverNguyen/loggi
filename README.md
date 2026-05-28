@@ -125,6 +125,52 @@ loggi profile config print
 `loggi tail`, `docker`, `stdin`, and `web` all auto-start the daemon when
 needed. They connect over `/tmp/loggi-$UID.sock`.
 
+## MCP (AI agent integration)
+
+loggi exposes a Model Context Protocol server so AI agents (Claude
+Code, Claude Desktop, Cursor, n8n, …) can query the same logs your
+web UI is showing — search by filter DSL, tail recent entries, draw
+histograms, and produce a clickable URL that opens the loggi UI with
+the same filter pre-applied.
+
+Two transports, same tools — pick whichever your client supports:
+
+**Stdio** — universal, auto-starts the daemon. Works with any MCP
+client (e.g. Claude Desktop's `claude_desktop_config.json`):
+
+```jsonc
+{
+  "mcpServers": {
+    "loggi": { "command": "loggi", "args": ["mcp"] }
+  }
+}
+```
+
+**HTTP** — for clients that speak MCP Streamable HTTP (Claude Code,
+n8n, scripts using `curl`). The daemon must be running:
+
+```jsonc
+{
+  "mcpServers": {
+    "loggi": { "url": "http://localhost:9199/mcp" }
+  }
+}
+```
+
+Tools (all read-only — no source/profile mutations):
+
+- `search_logs(filter, from?, to?, limit?)` — filter DSL → matching entries
+- `tail_recent(n?, filter?)` — most recent N matching entries
+- `histogram(filter?, from?, to?, bucket?)` — time-bucketed counts by level
+- `list_sources()` — registered sources
+- `get_entry_by_seq(seq)` — one entry, full detail
+- `list_profiles()` — saved filter profiles
+- `get_view_url(filter?, profile?, columns?, paused?)` — clickable URL for the user
+
+After a useful search, agents are encouraged to call `get_view_url`
+with the same filter and present the URL to you so you can pivot
+into the web UI for interactive exploration.
+
 ## Web UI
 
 The embedded SPA is the primary interface.

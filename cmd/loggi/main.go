@@ -36,6 +36,7 @@ Quick start:
 	root.AddCommand(app.NewInitCmd())
 	root.AddCommand(app.NewProfileCmd())
 	root.AddCommand(app.NewConfigCmd())
+	root.AddCommand(app.NewMCPCmd())
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)

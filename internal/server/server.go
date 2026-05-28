@@ -35,6 +35,7 @@ type Options struct {
 	StoreCap        uint64
 	Logger          *log.Logger
 	StaticFS        http.Handler // embedded SPA handler; nil = serve a placeholder
+	MCPHandler      http.Handler // MCP Streamable HTTP handler; nil = /mcp returns 404
 	Profiles        []ProfileInfo
 	Theme           string
 	Density         string // round-tripped only; "compact" | "cozy" | "comfortable"
@@ -220,6 +221,12 @@ func NewServer(opts Options) *Server {
 
 // Store returns the underlying store (used by tests / handlers).
 func (s *Server) Store() *store.Store { return s.store }
+
+// SetMCPHandler installs (or replaces) the handler for /mcp. Must be called
+// before Start; safe with nil to clear. Lives as a setter so callers can
+// build an MCP handler that closes over this Server without forcing a
+// circular import (internal/server ← internal/mcp).
+func (s *Server) SetMCPHandler(h http.Handler) { s.opts.MCPHandler = h }
 
 // HTTPURL returns the chosen HTTP base URL after Start has run.
 func (s *Server) HTTPURL() string { return s.httpURL }
@@ -683,6 +690,17 @@ func (s *Server) RemoveSource(id uint64) error {
 	rec.cancel()
 	s.maybeStartIdle()
 	return nil
+}
+
+// ProfilesSnapshot returns a copy of the current saved-profiles list.
+// Safe for external readers (e.g. the MCP server) that want a stable
+// view without holding profilesMu themselves.
+func (s *Server) ProfilesSnapshot() []ProfileInfo {
+	s.profilesMu.Lock()
+	defer s.profilesMu.Unlock()
+	out := make([]ProfileInfo, len(s.opts.Profiles))
+	copy(out, s.opts.Profiles)
+	return out
 }
 
 // Sources lists current sources.
