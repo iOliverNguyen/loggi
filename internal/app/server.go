@@ -34,8 +34,10 @@ func NewServerCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&debug, "debug", false, "enable /api/debug/* endpoints for runtime introspection")
 
 	cmd.AddCommand(&cobra.Command{
-		Use:   "stop",
-		Short: "Stop a running server",
+		Use:           "stop",
+		Short:         "Stop a running server",
+		SilenceUsage:  true, // "couldn't find a pid" isn't a usage error
+		SilenceErrors: true, // main.go already prints the error once
 		RunE: func(_ *cobra.Command, _ []string) error {
 			return stopServer()
 		},
@@ -138,6 +140,15 @@ func stopServer() error {
 		return signalAndReport(pid, "")
 	}
 	if h, url := client.DiscoverRunningDaemon(); h != nil {
+		if h.PID == 0 {
+			// Older daemon — /api/health doesn't expose pid. We must
+			// NOT call kill(0, ...) (that signals every process in the
+			// caller's group). Tell the user how to find it.
+			return fmt.Errorf(
+				"loggi is running at %s but doesn't expose its pid via /api/health "+
+					"(older version). Find and stop it manually with:\n"+
+					"  lsof -nP -iTCP -sTCP:LISTEN -P | grep loggi", url)
+		}
 		return signalAndReport(h.PID, fmt.Sprintf(" (found via %s/api/health)", url))
 	}
 	fmt.Println("no server running")
@@ -210,8 +221,14 @@ func statusServer() error {
 
 // printStatus emits the multi-line status block. note is printed last
 // (with a "note:" prefix) when non-empty — used to flag a degraded path.
+// Older daemons that don't expose pid/socket get an additional
+// "restart to enable" hint appended automatically.
 func printStatus(pid int, socket, httpURL string, uptime time.Duration, h *client.Health, note string) {
-	fmt.Printf("pid:    %d\n", pid)
+	if pid > 0 {
+		fmt.Printf("pid:    %d\n", pid)
+	} else {
+		fmt.Printf("pid:    (older daemon — restart to expose)\n")
+	}
 	if socket != "" {
 		fmt.Printf("socket: %s\n", socket)
 	}
@@ -221,6 +238,14 @@ func printStatus(pid int, socket, httpURL string, uptime time.Duration, h *clien
 	if h != nil {
 		fmt.Printf("rows:   %d  sources: %d (%d open)  sessions: %d\n",
 			h.Rows, h.Sources, h.SourcesOpen, h.Sessions)
+	}
+	if pid == 0 || socket == "" {
+		extra := "running an older loggi — restart it to enable full status/stop discovery"
+		if note != "" {
+			note = note + "; " + extra
+		} else {
+			note = extra
+		}
 	}
 	if note != "" {
 		fmt.Printf("note:   %s\n", note)

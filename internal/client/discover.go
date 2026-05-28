@@ -27,11 +27,15 @@ type Health struct {
 }
 
 // DiscoverViaHealth probes <url>/api/health and returns the daemon's
-// self-reported pid + socket. A 500ms timeout keeps this cheap on the
-// dial path — a running local daemon answers in microseconds, and a
-// silent port should not block the caller. Returns an error if the URL
-// is unreachable, returns non-200, or the response doesn't carry the
-// fields we need (i.e. it isn't a loggi server).
+// self-reported state. A 500ms timeout keeps this cheap on the dial
+// path — a running local daemon answers in microseconds, and a silent
+// port should not block the caller.
+//
+// "Is this loggi?" is decided on started_unix, which every loggi build
+// has exposed since /api/health was introduced. The newer pid/socket
+// fields may be absent from older daemons; callers must handle PID==0
+// and Socket=="" gracefully (status prints a hint to restart; stop
+// refuses to signal an unknown pid).
 func DiscoverViaHealth(url string) (*Health, error) {
 	if url == "" {
 		return nil, errors.New("empty URL")
@@ -49,8 +53,8 @@ func DiscoverViaHealth(url string) (*Health, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&h); err != nil {
 		return nil, err
 	}
-	if h.PID == 0 || h.Socket == "" {
-		return nil, errors.New("health response missing pid/socket — not a loggi server?")
+	if h.StartedUnix == 0 {
+		return nil, errors.New("health response missing started_unix — not a loggi server?")
 	}
 	return &h, nil
 }
@@ -91,13 +95,19 @@ func configBindURL() string {
 	return HTTPBindURL(loaded.Config.Server.HTTPBind)
 }
 
+// defaultHTTPBind mirrors server.DefaultHTTPBind. It's redefined here
+// rather than imported so the client package doesn't drag in the
+// server package; keep the two values in sync.
+const defaultHTTPBind = "127.0.0.1:9199"
+
 // HTTPBindURL turns a "host:port" bind address into an "http://host:port"
-// URL, normalising a wildcard or empty host to a loopback address. Empty
-// input returns "" so callers can distinguish "not configured" from a
-// usable URL.
+// URL, normalising a wildcard or empty host to a loopback address. An
+// empty bind maps to the daemon's default bind (so discovery probes the
+// same address the daemon actually listens on when the user's config
+// leaves http_bind unset).
 func HTTPBindURL(bind string) string {
 	if bind == "" {
-		return ""
+		bind = defaultHTTPBind
 	}
 	host, port, err := net.SplitHostPort(bind)
 	if err != nil {
